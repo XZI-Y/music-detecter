@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build-cache/
+models/ast/onnx/
+models/ast/config.json
+models/ast/preprocessor_config.json
+work-model-meta.json
+*.log
+.env

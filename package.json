@@ -1,0 +1,72 @@
+{
+  "name": "music-compass",
+  "productName": "听见新喜欢",
+  "version": "1.1.0",
+  "description": "本地优先的网易云音乐发现助手",
+  "author": "Music Compass",
+  "license": "MIT",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "build": {
+    "appId": "local.musiccompass.desktop",
+    "productName": "听见新喜欢",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "README.md",
+      "THIRD_PARTY_NOTICES.md",
+      "LICENSE"
+    ],
+    "asar": true,
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": true,
+      "artifactName": "MusicCompass-Setup-${version}.${ext}",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "听见新喜欢",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "XZI-Y",
+        "repo": "music-detecter",
+        "releaseType": "release"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "models/ast",
+        "to": "models/ast"
+      }
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "**/*.dll"
+    ]
+  },
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1",
+    "@neteasecloudmusicapienhanced/api": "4.40.0",
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "electron": "42.11.10",
+    "electron-builder": "26.15.3"
+  }
+}
