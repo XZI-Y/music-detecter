@@ -13,6 +13,9 @@ const {configureUpdates}=require('./updater');
 const {dailyStatus,recordSeen,dailyRetry}=require('./daily');
 const {validateAvoidance}=require('./music-types');
 const appearance=require('./appearance');
+const {LyricsController}=require('./lyrics-controller');
+const recommendationSettings=require('./recommendation-settings');
+let lyricService,appearancePreview=null;
 const originalLog = console.log;
 console.log = (...args) => { if (args[0] === '[ERR]') originalLog('[网易云接口暂不可用]'); else originalLog(...args); };
 app.setName('雷达');
@@ -34,7 +37,7 @@ function uiWindows(){return [win,bubble].filter(w=>w&&!w.isDestroyed());}
 function changed() { for(const w of uiWindows())w.webContents.send('music:changed'); }
 function snapshot() {
   const d = store.data;
-  return { ...d, library: undefined, likedIds: undefined, analysisArchive:undefined, seenRecommendations:undefined, daily:dailyStatus(d,!!cookie,busy), musicStatistics:statistics(d), floating:{mode:d.settings.floatingMode||"dock",expanded:!!floatingExpanded}, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
+  return { ...d, settings:{...d.settings,appearance:appearancePreview||d.settings.appearance},lyrics:lyricService?.snapshot(), library: undefined, likedIds: undefined, analysisArchive:undefined, seenRecommendations:undefined, daily:dailyStatus(d,!!cookie,busy), musicStatistics:statistics(d), floating:{mode:d.settings.floatingMode||"dock",expanded:!!floatingExpanded}, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
 }
 function saveCookie(value) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows 安全存储暂不可用，无法安全保存登录。请稍后重试。');
@@ -212,6 +215,12 @@ function createWindow() {
         await win.webContents.executeJavaScript('page("settings"); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         await new Promise(r=>setTimeout(r,180));
         fs.writeFileSync(path.join(app.getPath('userData'),'settings.png'),(await win.webContents.capturePage()).toPNG());
+        await win.webContents.executeJavaScript('page("lyrics")');await new Promise(r=>setTimeout(r,180));
+        fs.writeFileSync(path.join(app.getPath('userData'),'lyrics.png'),(await win.webContents.capturePage()).toPNG());
+        for(const material of ['paper','neon','metal']){
+          await win.webContents.executeJavaScript('appearanceDraft={mode:"dark",material:'+JSON.stringify(material)+',hue:275,saturation:60};renderAppearance();page("today")');await new Promise(r=>setTimeout(r,180));
+          fs.writeFileSync(path.join(app.getPath('userData'),material+'.png'),(await win.webContents.capturePage()).toPNG());
+        }
         await win.webContents.executeJavaScript('appearanceDraft={mode:"dark",material:"glass",hue:210,saturation:45};renderAppearance();page("today")');
         await new Promise(r=>setTimeout(r,180));
         fs.writeFileSync(path.join(app.getPath('userData'),'glass.png'),(await win.webContents.capturePage()).toPNG());
@@ -222,11 +231,22 @@ function createWindow() {
         const fixture=await win.webContents.executeJavaScript('JSON.parse(JSON.stringify(state))');
         store.data.settings.floating=true;setupBubble();
         await new Promise(resolve=>bubble.webContents.once('did-finish-load',resolve));
+        const oldHistory=store.data.history,oldResolve=player.options.resolve,oldSend=player.options.send,oldLyricsResolve=lyricService.options.resolve;
+        store.data.history=fixture.history;player.options.resolve=async id=>({url:'isolated-test',trial:false});player.options.send=()=>{};lyricService.options.resolve=async()=>({lrc:{lyric:'[00:00]第一句\n[00:40]同步歌词'}});
+        const firstPlay=await bubble.webContents.executeJavaScript('(async()=>{document.getElementById("toggle").click();for(let i=0;i<4;i++)await new Promise(r=>requestAnimationFrame(r));const s=(await window.music.request("state")).data;return {id:s.player.song?.id,lyrics:s.lyrics.status};})()');
+        if(firstPlay.id!==fixture.history[0].songs[0].id||firstPlay.lyrics!=='timed')throw new Error('气泡首次播放与歌词接入验证失败');
+        fs.writeFileSync(path.join(app.getPath('userData'),'first-play.json'),JSON.stringify(firstPlay));
+        player.stop();player.options.resolve=oldResolve;player.options.send=oldSend;lyricService.options.resolve=oldLyricsResolve;store.data.history=oldHistory;
+        const originalHue=store.data.settings.appearance.hue;
+        const skin=await bubble.webContents.executeJavaScript('(async()=>{const before=getComputedStyle(document.getElementById("bubble")).background;await window.music.request("appearancePreview",{mode:"dark",material:"metal",hue:275,saturation:60});await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return {changed:before!==getComputedStyle(document.getElementById("bubble")).background,hue:getComputedStyle(document.documentElement).getPropertyValue("--hue").trim(),material:document.documentElement.dataset.material};})()');
+        if(!skin.changed||skin.hue!=='275'||skin.material!=='metal'||store.data.settings.appearance.hue!==originalHue)throw new Error('悬浮播放器实时材质配色同步失败');
+        fs.writeFileSync(path.join(app.getPath('userData'),'appearance-test.json'),JSON.stringify(skin));appearancePreview=null;
+        fixture.settings.appearance={mode:'dark',material:'glass',hue:210,saturation:45};
         const area=screen.getPrimaryDisplay().workArea;
         const interactive=await bubble.webContents.executeJavaScript(`(async()=>{const before=(await window.music.request('state')).data.player.mode;document.getElementById('mode').click();await new Promise(r=>requestAnimationFrame(r));const after=(await window.music.request('state')).data.player.mode;await window.music.request('floatingDrag',{phase:'start',x:${area.x+400},y:${area.y+5}});await window.music.request('floatingDrag',{phase:'end',x:${area.x+400},y:${area.y+300}});await window.music.request('bubbleExpand',{expanded:true});const s=(await window.music.request('state')).data;return {controls:before!==after,bubble:s.floating.mode==='bubble'&&s.floating.expanded,region:getComputedStyle(document.getElementById('bubble')).getPropertyValue('-webkit-app-region')};})()`);
         if(!interactive.controls||!interactive.bubble||interactive.region!=='no-drag')throw new Error('悬浮播放器交互验证失败');
         fs.writeFileSync(path.join(app.getPath('userData'),'floating-test.json'),JSON.stringify(interactive));
-        fixture.floating={mode:'bubble',expanded:true};bubble.setBounds({x:100,y:100,width:420,height:345});
+        fixture.floating={mode:'bubble',expanded:true};bubble.setBounds({x:100,y:100,width:420,height:370});
         await bubble.webContents.executeJavaScript('window.__previewFixture('+JSON.stringify(fixture)+'); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         fs.writeFileSync(path.join(app.getPath('userData'),'bubble.png'),(await bubble.webContents.capturePage()).toPNG());
         await bubble.webContents.executeJavaScript('window.music.request("floatingDock")');
@@ -272,7 +292,8 @@ else {
       await decoderHelper.ready;const id=++decodeSequence;
       return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{decodePending.delete(id);reject(new Error('音频解码超时'));},20000);decodePending.set(id,{resolve,reject,timer});decodeWindow.webContents.send('audio:decode',{id,bytes});});
     }});
-    player=new PlayerController({resolve:id=>mediaConnector.playback(id),send:command=>audioHelper.ready.then(()=>playerWindow.webContents.send('player:command',command)),changed:value=>{for(const w of uiWindows())w.webContents.send('music:player',value);}});
+    lyricService=new LyricsController({resolve:id=>mediaConnector.call('lyric',{id}),changed:value=>{for(const w of uiWindows())w.webContents.send('music:lyrics',value);}});
+    player=new PlayerController({resolve:id=>mediaConnector.playback(id),send:command=>audioHelper.ready.then(()=>playerWindow.webContents.send('player:command',command)),changed:value=>{lyricService.select(value.song?.id||null);for(const w of uiWindows())w.webContents.send('music:player',value);}});
     ipcMain.on('audio:decoded',(event,value)=>{if(event.sender!==decodeWindow.webContents)return;const p=decodePending.get(value.id);if(!p)return;clearTimeout(p.timer);decodePending.delete(value.id);value.error?p.reject(new Error(value.error)):p.resolve(value.clips);});
     ipcMain.on('player:report',(event,value)=>{if(event.sender===playerWindow.webContents)player.report(value).catch(e=>progress(e.message));});
     updates=configureUpdates({app,settings:()=>store.data.settings,disabled:smoke,notify:value=>{for(const w of uiWindows())w.webContents.send('music:update',value);}});
@@ -314,7 +335,10 @@ else {
           }
           case 'playlists': if (busy) throw new Error('请等待更新完成'); value=await loadPlaylists(); break;
           case 'generate': value = await generate(true); break;
-          case 'appearance': {store.data.settings.appearance=appearance.validate(payload||{});store.save();changed();value=snapshot();break;}
+          case 'appearancePreview': {appearancePreview=appearance.validate(payload||{});for(const w of uiWindows())w.webContents.send('music:appearance',appearancePreview);value=true;break;}
+          case 'recommendationCount': {if(busy)throw new Error('请等待更新完成后调整数量');store.data.settings.count=recommendationSettings.count(payload?.count);store.save();changed();value=snapshot();break;}
+          case 'lyricsRetry': {if(!player.snapshot().song)throw new Error('先播放一首歌曲');await lyricService.select(player.snapshot().song.id,true);value=lyricService.snapshot();break;}
+          case 'appearance': {appearancePreview=null;store.data.settings.appearance=appearance.validate(payload||{});store.save();changed();value=snapshot();break;}
           case 'avoidance': {if(busy)throw new Error('更新中请稍后保存筛选');Object.assign(store.data.settings,validateAvoidance(payload||{}));store.save();changed();value=snapshot();break;}
           case 'analyzeMore': value=await analyzeMore();break;
           case 'cancel': connector.cancelled=true;value=true;break;
@@ -322,7 +346,7 @@ else {
             if (busy) throw new Error('更新中暂时无法修改设置');
             const p = payload || {};
             const count = Number(p.count), exploration = Number(p.exploration), syncHour = Number(p.syncHour);
-            if (![10, 20, 30].includes(count) || !Number.isInteger(exploration) || exploration < 0 || exploration > 60 || !Number.isInteger(syncHour) || syncHour < 0 || syncHour > 23) throw new Error('设置值无效');
+            if (!Number.isInteger(count) || count<1 || count>100 || !Number.isInteger(exploration) || exploration < 0 || exploration > 60 || !Number.isInteger(syncHour) || syncHour < 0 || syncHour > 23) throw new Error('设置值无效');
             const selected = [...new Set((p.selected || []).map(id))];
             if (selected.length > 100 || selected.some(x => !store.data.playlists.some(y => y.id === x))) throw new Error('请选择可用的分析歌单');
             const target=p.favoritePlaylist? id(p.favoritePlaylist):null;
@@ -341,7 +365,7 @@ else {
             const songId=id(payload?.id);const history=store.data.history.find(h=>h.date===payload?.date)||store.data.history.find(h=>h.songs.some(s=>s.id===songId));
             if(!history)throw new Error('播放列表不存在');await player.play(history.songs,songId);value=player.snapshot();break;
           }
-          case 'playerCommand': await player.command(payload?.type,payload?.value);value=player.snapshot();break;
+          case 'playerCommand': await recommendationSettings.playerCommand(player,store.data,payload?.type,payload?.value);value=player.snapshot();break;
           case 'openWindow':win.show();win.focus();value=true;break;
           case 'bubbleExpand': {
             if(event.sender!==bubble?.webContents)throw new Error('操作来源无效');
@@ -392,11 +416,11 @@ else {
             if (!target.canceled) fs.writeFileSync(target.filePath, history.songs.map(s => `${s.name} — ${s.artists.map(a => a.name).join(' / ')}\r\nhttps://music.163.com/#/song?id=${s.id}`).join('\r\n\r\n'), 'utf8');
             value = !target.canceled; break;
           }
-          case 'logout': if (busy||favoritePending.size) throw new Error('请等待当前操作完成后退出');player.stop(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); value = snapshot(); break;
+          case 'logout': if (busy||favoritePending.size) throw new Error('请等待当前操作完成后退出');player.stop();lyricService.clear(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); value = snapshot(); break;
           case 'clear': {
             if (busy||favoritePending.size) throw new Error('请等待当前操作完成后清除');
             const answer = await dialog.showMessageBox(win, { type: 'question', buttons: ['取消', '清除'], defaultId: 0, cancelId: 0, title: '清除本地数据', message: '清除账号连接、历史歌单和反馈？', detail: '网易云账号里的歌曲和歌单不会受影响。' });
-            if (answer.response === 1) {player.stop(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); if(!smoke)app.setLoginItemSettings({ openAtLogin: false }); store.clear(); candidateCache = []; connector.cache.clear();audioAnalysis.clear();fs.writeFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),'{}');setupTray();setupBubble(); }
+            if (answer.response === 1) {player.stop();lyricService.clear(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); if(!smoke)app.setLoginItemSettings({ openAtLogin: false }); store.clear(); candidateCache = []; connector.cache.clear();audioAnalysis.clear();fs.writeFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),'{}');setupTray();setupBubble(); }
             value = snapshot(); break;
           }
           default: throw new Error('不支持的操作');

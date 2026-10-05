@@ -1,10 +1,10 @@
 'use strict';
-const $=id=>document.getElementById(id);let state,currentPage='today',historyDate,qrTimer,qrEpoch=0,toastTimer,settingsDirty=false,localBusy=false,seekDragging=false,currentPlayer,avoidanceDraft=null,avoidStrengthDraft=null,appearanceDraft=null;
+const $=id=>document.getElementById(id);let state,currentPage='today',historyDate,qrTimer,qrEpoch=0,toastTimer,settingsDirty=false,localBusy=false,seekDragging=false,currentPlayer,avoidanceDraft=null,avoidStrengthDraft=null,appearanceDraft=null,currentLyrics={songId:null,status:'idle',lines:[],message:'还没有播放音乐'},lyricNodes=[],lyricSignature='',lyricActive=-2,lyricScrollUntil=0;
 function element(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
 function toast(text){$('toast').textContent=text;$('toast').classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.add('hidden'),6000);}
 async function request(action,data){const r=await window.music.request(action,data);if(!r.ok)throw new Error(r.error);return r.data;}
 async function run(fn){try{return await fn();}catch(e){toast(e.message);return null;}}
-function page(name){currentPage=name;document.querySelectorAll('.page').forEach(e=>e.classList.toggle('hidden',e.id!=='page-'+name));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===name));$('page-label').textContent={today:'今日推荐',taste:'偏好统计',history:'历史歌单',settings:'设置'}[name];}
+function page(name){if(currentPage!==name)window.scrollTo(0,0);currentPage=name;document.querySelectorAll('.page').forEach(e=>e.classList.toggle('hidden',e.id!=='page-'+name));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===name));$('page-label').textContent={today:'今日推荐',taste:'偏好统计',history:'历史歌单',settings:'设置',lyrics:'正在播放 · 歌词'}[name];if(name==='lyrics'){lyricActive=-2;renderLyricPosition();}}
 function time(seconds){return Math.floor(seconds/60)+':'+String(Math.floor(seconds%60)).padStart(2,'0');}
 function setBusy(busy){localBusy=busy;$('progress').classList.toggle('hidden',!busy);for(const id of ['generate','qr-start','load-playlists','logout','clear','analyze-more','start-analysis'])$(id).disabled=busy;$('settings-form').querySelectorAll('input,select,button').forEach(e=>{if(!['check-update','download-update','install-update'].includes(e.id))e.disabled=busy;});}
 function saved(songId){return state.favorites?.[state.settings.favoritePlaylist]?.includes(songId);}
@@ -63,11 +63,28 @@ function renderPlayer(p){
  if(!seekDragging){$('player-seek').max=p.duration||1;$('player-seek').value=p.time;}
  $('player-mode').textContent=p.mode==='shuffle'?'⤨':'→';$('player-mode').title=p.mode==='shuffle'?'随机播放':'顺序播放';$('player-message').textContent=p.error||(p.loading?'正在加载…':p.trial?'试听':'');$('player-volume').value=p.volume;
  $('player-heart').textContent=saved(p.song?.id)?'♥':'♡';$('player-heart').classList.toggle('favorite',!!saved(p.song?.id));
- for(const id of ['player-toggle','player-previous','player-next','player-heart'])$(id).disabled=!p.song;
+ for(const id of ['player-previous','player-next','player-heart'])$(id).disabled=!p.song;$('player-toggle').disabled=!p.song&&!state?.history?.some(h=>h.songs.length);renderLyricPosition();
 }
+function renderLyrics(value){
+ currentLyrics=value;const signature=JSON.stringify(value);if(signature!==lyricSignature){
+  lyricSignature=signature;lyricActive=-2;lyricNodes=[];$('lyric-lines').replaceChildren();$('lyrics-status').textContent=value.message||'';
+  if(value.status==='timed')for(const line of value.lines){const item=element('div','lyric-line',line.text);if(line.translation)item.append(element('small','lyric-translation',line.translation));$('lyric-lines').append(item);lyricNodes.push(item);}
+  else if(value.status==='plain')for(const text of value.plain.split('\n'))$('lyric-lines').append(element('div','lyric-line',text));
+  else $('lyric-lines').append(element('p','lyric-empty',value.message||'播放后显示歌词'));
+ }renderLyricPosition();
+}
+function renderLyricPosition(){
+ const song=currentPlayer?.song,same=currentLyrics.songId===song?.id;
+ $('lyrics-title').textContent=song?.name||'歌词';$('lyrics-artist').textContent=song?.artists?.map(a=>a.name).join(' / ')||'播放音乐后，歌词会显示在这里。';$('reload-lyrics').disabled=!song;
+ const index=same?LyricFormat.current(currentLyrics.lines||[],currentPlayer?.time||0):-1;
+ if(index!==lyricActive){lyricNodes.forEach((node,i)=>node.classList.toggle('active',i===index));lyricActive=index;if(index>=0&&currentPage==='lyrics'&&Date.now()>lyricScrollUntil){const container=$('lyric-lines'),node=lyricNodes[index];if(node)container.scrollTo({top:container.scrollTop+node.getBoundingClientRect().top-container.getBoundingClientRect().top-container.clientHeight/2+node.clientHeight/2,behavior:'smooth'});}}
+ $('player-lyric').textContent=!song?'播放后显示歌词':!same?'正在加载歌词…':index>=0?currentLyrics.lines[index].text:currentLyrics.status==='plain'?currentLyrics.plain.split('\n')[0]:currentLyrics.status==='timed'?'前奏…':currentLyrics.message;
+}
+$('player-lyric').onclick=()=>{lyricActive=-2;page('lyrics');};$('lyric-lines').onwheel=()=>{lyricScrollUntil=Date.now()+5000;};$('lyric-lines').ontouchstart=()=>{lyricScrollUntil=Date.now()+5000;};
+$('reload-lyrics').onclick=()=>run(async()=>renderLyrics(await request('lyricsRetry')));
 function renderUpdate(value){if(!value)return;$('update-status').textContent=value.message;$('download-update').classList.toggle('hidden',value.status!=='available');$('install-update').classList.toggle('hidden',value.status!=='ready');}
 function render(){
- renderAppearance();
+ renderAppearance();renderLyrics(state.lyrics||currentLyrics);if(document.activeElement!==$('recommend-count'))$('recommend-count').value=state.settings.count;$('save-count').disabled=$('recommend-count').disabled=!!state.busy;
  $('account-name').textContent=state.connected?state.profile?.name||'已连接':'未连接网易云';$('version-label').textContent='v'+state.version;$('date-label').textContent=state.today;
  $('connection-text').textContent=state.connected?'已连接 '+(state.profile?.name||'网易云账号'):'用手机网易云音乐扫码连接。';$('logout').classList.toggle('hidden',!state.connected);$('qr-start').textContent=state.connected?'重新连接':'扫码连接';
  $('step-connect').classList.toggle('complete',state.connected);$('step-select').classList.toggle('complete',state.settings.sourceConfirmed);$('step-start').classList.toggle('complete',!!state.lastSync);$('source-status').textContent=state.settings.sourceConfirmed?'选择已保存':'选择后点击保存';
@@ -137,9 +154,10 @@ function renderAppearance(){
  const a=appearanceDraft||state.settings.appearance||RadarAppearance.defaults;RadarAppearance.apply(a);
  for(const key of ['mode','material','hue','saturation'])$('appearance-'+key).value=a[key];$('hue-value').textContent=a.hue+'°';$('saturation-value').textContent=a.saturation+'%';
 }
-function previewAppearance(){appearanceDraft={mode:$('appearance-mode').value,material:$('appearance-material').value,hue:Number($('appearance-hue').value),saturation:Number($('appearance-saturation').value)};renderAppearance();$('appearance-status').textContent='预览中 · 保存后应用于播放器';}
+function previewAppearance(){appearanceDraft={mode:$('appearance-mode').value,material:$('appearance-material').value,hue:Number($('appearance-hue').value),saturation:Number($('appearance-saturation').value)};renderAppearance();request('appearancePreview',appearanceDraft).catch(e=>toast(e.message));$('appearance-status').textContent='预览中 · 顶部和气泡同步预览';}
 for(const key of ['mode','material','hue','saturation'])$('appearance-'+key).oninput=previewAppearance;
 document.querySelectorAll('.appearance-presets button').forEach(button=>{button.onclick=()=>{$('appearance-hue').value=button.dataset.hue;previewAppearance();};});
+$('save-count').onclick=()=>run(async()=>{state=await request('recommendationCount',{count:Number($('recommend-count').value)});$('setting-count').value=state.settings.count;render();toast('数量已保存，下次生成生效');});
 $('save-appearance').onclick=()=>run(async()=>{state=await request('appearance',appearanceDraft||state.settings.appearance);appearanceDraft=null;renderAppearance();$('appearance-status').textContent='外观已保存';toast('外观已同步到播放器');});
 $('reset-appearance').onclick=()=>run(async()=>{state=await request('appearance',RadarAppearance.defaults);appearanceDraft=null;renderAppearance();$('appearance-status').textContent='已恢复默认外观';});
 $('avoid-strength').onchange=()=>{avoidStrengthDraft=Number($('avoid-strength').value);$('avoid-status').textContent='筛选尚未保存';};
@@ -166,7 +184,7 @@ $('player-heart').onclick=()=>run(()=>currentPlayer?.song&&favorite(currentPlaye
 $('player-seek').onpointerdown=()=>{seekDragging=true;};$('player-seek').onchange=()=>{run(()=>request('playerCommand',{type:'seek',value:Number($('player-seek').value)}));seekDragging=false;};$('player-seek').onpointerup=()=>{seekDragging=false;};$('player-volume').oninput=()=>run(()=>request('playerCommand',{type:'volume',value:Number($('player-volume').value)}));
 $('check-update').onclick=()=>run(async()=>renderUpdate(await request('checkUpdate')));$('download-update').onclick=()=>run(async()=>renderUpdate(await request('downloadUpdate')));$('install-update').onclick=()=>run(()=>request('installUpdate'));
 for(let hour=0;hour<24;hour++){const o=element('option','',String(hour).padStart(2,'0')+':00');o.value=hour;$('setting-hour').append(o);}
-window.music.onProgress(text=>{$('progress-text').textContent=text;if(!localBusy&&!state?.busy)toast(text);});window.music.onChanged(()=>run(refresh));window.music.onPlayer(renderPlayer);window.music.onUpdate(renderUpdate);
+window.music.onProgress(text=>{$('progress-text').textContent=text;if(!localBusy&&!state?.busy)toast(text);});window.music.onChanged(()=>run(refresh));window.music.onPlayer(renderPlayer);window.music.onLyrics(renderLyrics);window.music.onUpdate(renderUpdate);
 window.__previewFixture=()=>{
  clearTimeout(toastTimer);$('toast').classList.add('hidden');
  state.connected=true;state.profile={id:42,name:'音乐爱好者'};state.settings.sourceConfirmed=true;state.settings.favoritePlaylist=99;state.favorites={99:[2]};
@@ -174,7 +192,7 @@ window.__previewFixture=()=>{
  state.analysis={metadata:120,audio:84,lyrics:98,pending:36};document.querySelector('#page-taste .page-title p').textContent='界面预览 · 虚构示例数据';
  state.musicStatistics={current:{total:120,audio:84,lyrics:98,groups:{instruments:{title:'乐器',total:120,known:72,unknown:48,multiple:true,rows:[{name:'原声吉他',count:41,percent:56.9},{name:'钢琴',count:32,percent:44.4},{name:'弦乐',count:18,percent:25}]},tempo:{title:'节奏速度',total:120,known:80,unknown:40,rows:[{name:'适中 · 90–129 BPM',count:48,percent:60},{name:'舒缓 · 90 BPM 以下',count:24,percent:30},{name:'明快 · 130 BPM 以上',count:8,percent:10}]},language:{title:'歌词语言',total:120,known:98,unknown:22,rows:[{name:'中文',count:54,percent:55.1},{name:'英语',count:29,percent:29.6},{name:'日语',count:15,percent:15.3}]},mood:{title:'歌词情绪',total:120,known:58,unknown:62,multiple:true,rows:[{name:'温暖',count:32,percent:55.2},{name:'思念',count:22,percent:37.9}]}}},runs:[]};state.musicStatistics.archive=state.musicStatistics.current;
  state.daily={status:'ready',count:4,updatedAt:new Date().toISOString(),nextAt:new Date(Date.parse(state.today+'T08:00:00+08:00')+86400000).toISOString()};
- state.player={song:state.history[0].songs[0],queue:state.history[0].songs,index:0,paused:false,loading:false,time:43,duration:226,volume:.8,mode:'sequence',error:'',trial:false};render();$('hero-meta').textContent='界面预览 · 虚构示例数据';page('today');
+ state.lyrics={songId:state.history[0].songs[0].id,status:'timed',message:'歌词随播放进度同步',lines:[{time:0,text:'窗边的风，轻轻经过'},{time:20,text:'沿着河岸，走向灯火'},{time:40,text:'把今天的故事，唱给晚风'},{time:65,text:'让下一段旋律，陪我们远行'}]};state.player={song:state.history[0].songs[0],queue:state.history[0].songs,index:0,paused:false,loading:false,time:43,duration:226,volume:.8,mode:'sequence',error:'',trial:false};render();$('hero-meta').textContent='界面预览 · 虚构示例数据';page('today');
 };
 window.__smokeTest=async()=>{
  await refresh();const checks=[],check=(name,pass)=>checks.push({name,pass});
@@ -187,6 +205,8 @@ window.__smokeTest=async()=>{
  const arbitrary=await window.music.request('arbitrary');check('拒绝未知调用',!arbitrary.ok);
  const hostile={id:999,name:'<img src=x onerror=alert(1)>',artists:[],reasons:['<script>alert(1)</script>']};songList($('history-songs'),[hostile],state.today);check('外部歌曲文字安全显示',$('history-songs').textContent.includes(hostile.name)&&!$('history-songs').querySelector('img,script'));
  window.__previewFixture();check('推荐行显示播放与爱心',$('today-songs').querySelectorAll('.play-row').length===4&&$('today-songs').querySelectorAll('.heart').length===4);
+ page('lyrics');await new Promise(r=>setTimeout(r,180));check('歌词滚动留在独立区域',window.scrollY===0&&$('lyric-lines').scrollHeight>$('lyric-lines').clientHeight);page('today');
+ check('同步歌词逐句高亮',$('player-lyric').textContent==='把今天的故事，唱给晚风'&&document.querySelector('#lyric-lines .active')?.textContent==='把今天的故事，唱给晚风');
  check('播放器时间正确',$('player-elapsed').textContent==='0:43'&&$('player-duration').textContent==='3:46');
  page('taste');check('偏好统计实际渲染分布',$('statistics-grid').querySelectorAll('.stat-row').length>0);check('统计可切换历次记录',!!$('statistics-scope').querySelector('[value=archive]'));
  $('appearance-mode').value='light';$('appearance-material').value='glass';$('appearance-hue').value='210';previewAppearance();check('外观可实时预览',document.documentElement.dataset.mode==='light'&&document.documentElement.dataset.material==='glass');await $('save-appearance').onclick();check('外观可独立保存',(await request('state')).settings.appearance.hue===210);await $('reset-appearance').onclick();window.__previewFixture();page('taste');
@@ -194,6 +214,8 @@ window.__smokeTest=async()=>{
  state.daily={status:'error',message:'没有足够新歌',retryAt:new Date(Date.now()+300000).toISOString()};renderDaily();check('更新失败不伪装成成功',$('daily-title').textContent.includes('原歌单已保留'));window.__previewFixture();page('taste');
  const filter=$('statistics-grid').querySelector('.avoid-option input');const type=filter.nextSibling.textContent;filter.checked=true;filter.onchange();await $('save-avoid').onclick();check('统计筛选通过控件保存到本地',(await request('state')).settings.avoidTypes.instruments.includes(type));
  await $('reset-avoid').onclick();check('取消类型筛选恢复默认',Object.values((await request('state')).settings.avoidTypes).flat().length===0);
+ $('recommend-count').value=7;await $('save-count').onclick();check('首页可独立保存任意推荐数量',(await request('state')).settings.count===7);await request('recommendationCount',{count:20});const badCount=await window.music.request('recommendationCount',{count:101});check('拒绝越界推荐数量',!badCount.ok);
+ const surfaces=[];for(const material of ['smooth','glass','flat','paper','neon','metal']){RadarAppearance.apply({mode:'dark',material,hue:210,saturation:45});surfaces.push(getComputedStyle(document.querySelector('.hero')).backgroundImage);}check('六种材质表面彼此区分',new Set(surfaces).size===6);
  const badAppearance=await window.music.request('appearance',{hue:999});check('拒绝无效外观设置',!badAppearance.ok);
  const badFilter=await window.music.request('avoidance',{types:{arbitrary:['bad']},strength:85});check('拒绝无效筛选因子',!badFilter.ok);
  await refresh();page('today');return {ok:checks.every(c=>c.pass),checks};

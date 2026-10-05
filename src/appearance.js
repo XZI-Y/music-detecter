@@ -3,7 +3,7 @@
  const defaults={mode:'dark',material:'smooth',hue:140,saturation:40};
  function validate(value={}){
   const result={...defaults,...value};
-  if(!['dark','light','system'].includes(result.mode)||!['smooth','glass','flat'].includes(result.material)||!Number.isInteger(result.hue)||result.hue<0||result.hue>360||!Number.isInteger(result.saturation)||result.saturation<15||result.saturation>90)throw new Error('外观设置无效');
+  if(!['dark','light','system'].includes(result.mode)||!['smooth','glass','flat','paper','neon','metal'].includes(result.material)||!Number.isInteger(result.hue)||result.hue<0||result.hue>360||!Number.isInteger(result.saturation)||result.saturation<15||result.saturation>90)throw new Error('外观设置无效');
   return {mode:result.mode,material:result.material,hue:result.hue,saturation:result.saturation};
  }
  let current=defaults,watching=false;
