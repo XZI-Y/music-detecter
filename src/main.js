@@ -16,7 +16,7 @@ const appearance=require('./appearance');
 const {LyricsController}=require('./lyrics-controller');
 const recommendationSettings=require('./recommendation-settings');
 const {Assistant}=require('./assistant');
-let assistant;
+let assistant,assistantWindow;
 let lyricService,appearancePreview=null;
 const originalLog = console.log;
 console.log = (...args) => { if (args[0] === '[ERR]') originalLog('[网易云接口暂不可用]'); else originalLog(...args); };
@@ -35,7 +35,7 @@ const smokeDirArg = process.argv.find(a => a.startsWith('--test-data='));
 if (smokeDirArg) app.setPath('userData', smokeDirArg.slice(12));
 const credentialPath = () => path.join(app.getPath('userData'), 'account.bin');
 function progress(message) { if (win && !win.isDestroyed()) win.webContents.send('music:progress', message); }
-function uiWindows(){return [win,bubble].filter(w=>w&&!w.isDestroyed());}
+function uiWindows(){return [win,bubble,assistantWindow].filter(w=>w&&!w.isDestroyed());}
 function changed() { for(const w of uiWindows())w.webContents.send('music:changed'); }
 function snapshot() {
   const d = store.data;
@@ -187,6 +187,14 @@ async function automatic() {
     if (!win.isVisible() && Notification.isSupported()) new Notification({ title: '雷达', body: '今天的推荐歌单已准备好', icon: path.join(__dirname, 'icon.png') }).show();
   } catch (e) { progress(e.message); }
 }
+async function openAssistantWindow(){
+  if(assistantWindow&&!assistantWindow.isDestroyed()){if(assistantWindow.isMinimized())assistantWindow.restore();assistantWindow.show();assistantWindow.focus();return;}
+  const bounds=bubble&&!bubble.isDestroyed()?bubble.getBounds():win.getBounds(),area=screen.getDisplayMatching(bounds).workArea;
+  const width=Math.min(460,area.width),height=Math.min(690,area.height);
+  const popup=new BrowserWindow({width,height,minWidth:360,minHeight:500,x:Math.max(area.x,Math.min(bounds.x+bounds.width-width,area.x+area.width-width)),y:Math.max(area.y,Math.min(bounds.y+bounds.height+8,area.y+area.height-height)),show:false,title:'雷达 · 音乐助手',icon:path.join(__dirname,'icon.png'),backgroundColor:'#19231c',autoHideMenuBar:true,alwaysOnTop:true,webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
+  assistantWindow=popup;popup.webContents.setWindowOpenHandler(()=>({action:'deny'}));popup.webContents.on('will-navigate',event=>event.preventDefault());popup.on('closed',()=>{if(assistantWindow===popup)assistantWindow=null;});
+  await popup.loadFile(path.join(__dirname,'assistant-popup.html'));popup.show();popup.focus();
+}
 function createWindow() {
   win = new BrowserWindow({ width: 1180, height: 830, minWidth: 930, minHeight: 680, title: '雷达', backgroundColor: '#101716', icon: path.join(__dirname, 'icon.png'), autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -260,25 +268,31 @@ function createWindow() {
         const area=screen.getPrimaryDisplay().workArea;
         const interactive=await bubble.webContents.executeJavaScript(`(async()=>{const before=(await window.music.request('state')).data.player.mode;document.getElementById('mode').click();await new Promise(r=>requestAnimationFrame(r));const after=(await window.music.request('state')).data.player.mode;await window.music.request('floatingDrag',{phase:'start',x:${area.x+400},y:${area.y+5}});await window.music.request('floatingDrag',{phase:'end',x:${area.x+400},y:${area.y+300}});await window.music.request('bubbleExpand',{expanded:true});const s=(await window.music.request('state')).data;return {controls:before!==after,bubble:s.floating.mode==='bubble'&&s.floating.expanded,region:getComputedStyle(document.getElementById('bubble')).getPropertyValue('-webkit-app-region')};})()`);
         if(!interactive.controls||!interactive.bubble||interactive.region!=='no-drag')throw new Error('悬浮播放器交互验证失败');
-        await bubble.webContents.executeJavaScript('document.getElementById("assistant").click()');
-        await new Promise(resolve=>setTimeout(resolve,150));
-        const assistantEntry=await win.webContents.executeJavaScript('!document.getElementById("page-assistant").classList.contains("hidden")');
-        if(!assistantEntry)throw new Error('气泡音乐助手入口验证失败');
-        interactive.assistant=assistantEntry;
+        win.hide();
+        await bubble.webContents.executeJavaScript('window.music.request("openAssistant")');
+        const assistantEntry=assistantWindow?.isVisible()&&!win.isVisible();
+        if(!assistantEntry)throw new Error('气泡独立聊天窗验证失败');
+        const popupCheck=await assistantWindow.webContents.executeJavaScript(`(async()=>{window.renderAssistant({installed:true,model:'界面测试',busy:false,messages:[{role:'assistant',text:'<img src=x onerror=alert(1)>'}],pending:{id:'expired',changes:[{label:'数量',before:20,after:30}]}});const safe=!document.querySelector('#ai-messages img')&&document.getElementById('ai-messages').textContent.includes('<img');const before=(await window.music.request('state')).data.settings.count;const bad=await window.music.request('assistantApply',{id:'expired'});return {safe,guard:!bad.ok&&(await window.music.request('state')).data.settings.count===before};})()`);
+        if(!popupCheck.safe||!popupCheck.guard)throw new Error('聊天窗消息与设置确认验证失败');
+        fs.writeFileSync(path.join(app.getPath('userData'),'assistant-popup-test.json'),JSON.stringify(popupCheck));
+        await assistantWindow.webContents.executeJavaScript('window.renderAssistant(state.assistant)');
+        fs.writeFileSync(path.join(app.getPath('userData'),'assistant-popup.png'),(await assistantWindow.webContents.capturePage()).toPNG());
+        assistantWindow.destroy();interactive.assistant=assistantEntry;
         fs.writeFileSync(path.join(app.getPath('userData'),'floating-test.json'),JSON.stringify(interactive));
         fixture.floating={mode:'bubble',expanded:true};bubble.setBounds({x:100,y:100,width:420,height:370});
         await bubble.webContents.executeJavaScript('window.__previewFixture('+JSON.stringify(fixture)+'); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         fs.writeFileSync(path.join(app.getPath('userData'),'bubble.png'),(await bubble.webContents.capturePage()).toPNG());
         await bubble.webContents.executeJavaScript('window.music.request("floatingDock")');
         fixture.floating={mode:'dock',expanded:false};await bubble.webContents.executeJavaScript('window.__previewFixture('+JSON.stringify(fixture)+'); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-        await win.webContents.executeJavaScript('page("today")');
-        await bubble.webContents.executeJavaScript('document.getElementById("assistant").click()');
+        win.hide();
+        await bubble.webContents.executeJavaScript('window.music.request("openAssistant")');
         await new Promise(resolve=>setTimeout(resolve,150));
-        const dockAssistant=await win.webContents.executeJavaScript('!document.getElementById("page-assistant").classList.contains("hidden")');
+        const dockAssistant=assistantWindow?.isVisible()&&!win.isVisible();
         const corners=await bubble.webContents.executeJavaScript('getComputedStyle(document.getElementById("panel")).borderTopLeftRadius');
         if(!dockAssistant||corners!=='24px')throw new Error('顶部栏助手与圆角验证失败');
         fs.writeFileSync(path.join(app.getPath('userData'),'dock-test.json'),JSON.stringify({assistant:dockAssistant,corners}));
         fs.writeFileSync(path.join(app.getPath('userData'),'dock.png'),(await bubble.webContents.capturePage()).toPNG());
+        assistantWindow?.destroy();win.show();
         if(process.argv.includes('--model-smoke')){
           const rate=16000,samples=rate*10,bytes=Buffer.alloc(44+samples*2);
           bytes.write('RIFF');bytes.writeUInt32LE(bytes.length-8,4);bytes.write('WAVE',8);bytes.write('fmt ',12);bytes.writeUInt32LE(16,16);bytes.writeUInt16LE(1,20);bytes.writeUInt16LE(1,22);bytes.writeUInt32LE(rate,24);bytes.writeUInt32LE(rate*2,28);bytes.writeUInt16LE(2,32);bytes.writeUInt16LE(16,34);bytes.write('data',36);bytes.writeUInt32LE(samples*2,40);
@@ -323,7 +337,7 @@ else {
     player=new PlayerController({resolve:id=>mediaConnector.playback(id),send:command=>audioHelper.ready.then(()=>playerWindow.webContents.send('player:command',command)),changed:value=>{lyricService.select(value.song?.id||null);for(const w of uiWindows())w.webContents.send('music:player',value);}});
     ipcMain.on('audio:decoded',(event,value)=>{if(event.sender!==decodeWindow.webContents)return;const p=decodePending.get(value.id);if(!p)return;clearTimeout(p.timer);decodePending.delete(value.id);value.error?p.reject(new Error(value.error)):p.resolve(value.clips);});
     ipcMain.on('player:report',(event,value)=>{if(event.sender===playerWindow.webContents)player.report(value).catch(e=>progress(e.message));});
-    assistant=new Assistant({dataPath:app.getPath('userData'),runtimePath:app.isPackaged?path.join(process.resourcesPath,'runtime','llama'):path.join(__dirname,'..','runtime','llama'),data:()=>store.data,changed:value=>{if(win&&!win.isDestroyed())win.webContents.send('music:assistant',value);}});
+    assistant=new Assistant({dataPath:app.getPath('userData'),runtimePath:app.isPackaged?path.join(process.resourcesPath,'runtime','llama'):path.join(__dirname,'..','runtime','llama'),data:()=>store.data,changed:value=>{for(const w of uiWindows())w.webContents.send('music:assistant',value);}});
     updates=configureUpdates({app,settings:()=>store.data.settings,disabled:smoke,notify:value=>{for(const w of uiWindows())w.webContents.send('music:update',value);}});
     ipcMain.handle('music:request', async (event, action, payload) => {
       if (!uiWindows().some(w=>w.webContents===event.sender) || event.senderFrame!==event.sender.mainFrame || !event.senderFrame.url.startsWith('file:')) return { ok: false, error: '请求来源无效' };
@@ -339,6 +353,7 @@ else {
           case 'assistantDismiss': value=assistant.dismiss();break;
           case 'assistantApply': {
             if(busy)throw new Error('请等待推荐更新完成后应用建议');
+            if(event.sender===assistantWindow?.webContents&&await win.webContents.executeJavaScript('!!settingsDirty'))throw new Error('请先保存主窗口设置中的未保存修改');
             Object.assign(store.data.settings,assistant.apply(payload?.id));store.save();changed();value=snapshot();break;
           }
           case 'qr': {
@@ -404,6 +419,7 @@ else {
             if(!history)throw new Error('播放列表不存在');await player.play(history.songs,songId);value=player.snapshot();break;
           }
           case 'playerCommand': await recommendationSettings.playerCommand(player,store.data,payload?.type,payload?.value);value=player.snapshot();break;
+          case 'openAssistant':await openAssistantWindow();value=true;break;
           case 'openWindow':win.show();win.focus();if(payload?.page==='assistant')win.webContents.send('music:navigate','assistant');value=true;break;
           case 'bubbleExpand': {
             if(event.sender!==bubble?.webContents)throw new Error('操作来源无效');
@@ -471,6 +487,6 @@ else {
     powerMonitor.on('resume',()=>{changed();automatic();});win.on('show',()=>{changed();automatic();});
     if(!smoke){setTimeout(()=>{if(store.data.settings.autoUpdate)updates.check();},120000);setInterval(()=>{if(store.data.settings.autoUpdate)updates.check();},14400000).unref();}
   });
-  app.on('before-quit', () => { quitting = true;assistant?.close();audioAnalysis?.close();playerWindow?.destroy();decodeWindow?.destroy();bubble?.destroy(); });
+  app.on('before-quit', () => { quitting = true;assistant?.close();audioAnalysis?.close();playerWindow?.destroy();decodeWindow?.destroy();bubble?.destroy();assistantWindow?.destroy(); });
   app.on('window-all-closed', () => app.quit());
 }

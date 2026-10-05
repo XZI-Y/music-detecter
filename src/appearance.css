@@ -59,3 +59,5 @@ body{color:var(--text)}body:not(.floating-root){background:var(--bg)}body:not(.f
 .nav.active{background:color-mix(in srgb,var(--accent) 15%,var(--panel))}
 .song{border-radius:12px;padding-left:10px;padding-right:10px}.song:hover{background:color-mix(in srgb,var(--accent) 4%,transparent)}
 .primary,.quiet,.danger{border-radius:10px}.panel h2{line-height:1.5}.page-title p{max-width:650px}
+
+.logo.radar-brand{background:transparent}.radar-brand img{width:38px;height:38px;object-fit:contain}
