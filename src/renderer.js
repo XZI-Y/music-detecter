@@ -53,7 +53,7 @@ function renderPlaylists(){
 }
 function renderSettings(){
  if(settingsDirty)return;renderPlaylists();
- for(const [id,key] of [['setting-likes','includeLikes'],['setting-recent','includeRecent'],['setting-avoid','avoidKnownArtists'],['setting-audio','deepAudio'],['setting-floating','floating'],['setting-background','background'],['setting-startup','startup'],['setting-update','autoUpdate']])$(id).checked=!!state.settings[key];
+ for(const [id,key] of [['setting-likes','includeLikes'],['setting-recent','includeRecent'],['setting-avoid','avoidKnownArtists'],['setting-audio','deepAudio'],['setting-floating','floating'],['setting-background','background'],['setting-startup','startup'],['setting-update','autoUpdate'],['setting-install-quit','installOnQuit']])$(id).checked=!!state.settings[key];
  for(const [id,key] of [['setting-batch','audioBatch'],['setting-repeat','repeatDays'],['setting-artist-limit','artistLimit'],['setting-album-limit','albumLimit']])$(id).value=state.settings[key];
  for(const [key,[name,value]] of Object.entries(WEIGHT_FIELDS)){const input=$('weight-'+key);input.value=state.settings.weights?.[key]??value;input.previousElementSibling.textContent=input.value;}
  $('setting-count').value=state.settings.count;$('setting-hour').value=state.settings.syncHour;$('setting-exploration').value=state.settings.exploration;$('exploration-value').textContent=state.settings.exploration+'%';
@@ -82,7 +82,8 @@ function renderLyricPosition(){
 }
 $('player-lyric').onclick=()=>{lyricActive=-2;page('lyrics');};$('lyric-lines').onwheel=()=>{lyricScrollUntil=Date.now()+5000;};$('lyric-lines').ontouchstart=()=>{lyricScrollUntil=Date.now()+5000;};
 $('reload-lyrics').onclick=()=>run(async()=>renderLyrics(await request('lyricsRetry')));
-function renderUpdate(value){if(!value)return;$('update-status').textContent=value.message;$('download-update').classList.toggle('hidden',value.status!=='available');$('install-update').classList.toggle('hidden',value.status!=='ready');}
+function renderUpdate(value){if(!value)return;$('update-status').textContent=value.message;$('download-update').classList.toggle('hidden',!(value.status==='available'||value.status==='error'&&value.failedAction==='download'));$('download-update').textContent=value.status==='error'?'重试下载':'后台下载更新';$('install-update').classList.toggle('hidden',value.status!=='ready');const working=value.status==='downloading';$('update-progress').classList.toggle('hidden',!working);$('update-progress').value=value.progress||0;const mb=n=>(n/1048576).toFixed(1)+' MB';$('update-detail').textContent=working&&value.total?mb(value.transferred||0)+' / '+mb(value.total)+' · '+mb(value.speed||0)+'/秒'+(value.downloadMode==='full'?' · 完整更新':value.downloadMode==='differential'?' · 差量下载':''):value.status==='ready'?'关闭窗口若只是缩到托盘，不会安装；选择托盘“退出”才会安装。':'';}
+
 function render(){
  window.renderAssistant?.(state.assistant);renderAppearance();renderLyrics(state.lyrics||currentLyrics);if(document.activeElement!==$('recommend-count'))$('recommend-count').value=state.settings.count;$('save-count').disabled=$('recommend-count').disabled=!!state.busy;
  $('account-name').textContent=state.connected?state.profile?.name||'已连接':'未连接网易云';$('version-label').textContent='v'+state.version;$('date-label').textContent=state.today;
@@ -132,7 +133,7 @@ async function loadPlaylists(){await request('playlists');settingsDirty=false;aw
 async function saveSettings(){
  const selected=[...$('playlist-list').querySelectorAll('input:checked')].map(e=>Number(e.value));
  const settings={count:Number($('setting-count').value),exploration:Number($('setting-exploration').value),syncHour:Number($('setting-hour').value),selected,favoritePlaylist:Number($('favorite-playlist').value)||null,confirmSources:true};
- for(const [id,key] of [['setting-likes','includeLikes'],['setting-recent','includeRecent'],['setting-avoid','avoidKnownArtists'],['setting-audio','deepAudio'],['setting-floating','floating'],['setting-background','background'],['setting-startup','startup'],['setting-update','autoUpdate']])settings[key]=$(id).checked;
+ for(const [id,key] of [['setting-likes','includeLikes'],['setting-recent','includeRecent'],['setting-avoid','avoidKnownArtists'],['setting-audio','deepAudio'],['setting-floating','floating'],['setting-background','background'],['setting-startup','startup'],['setting-update','autoUpdate'],['setting-install-quit','installOnQuit']])settings[key]=$(id).checked;
  settings.audioBatch=Number($('setting-batch').value);settings.repeatDays=Number($('setting-repeat').value);settings.artistLimit=Number($('setting-artist-limit').value);settings.albumLimit=Number($('setting-album-limit').value);settings.weights=Object.fromEntries(Object.keys(WEIGHT_FIELDS).map(k=>[k,Number($('weight-'+k).value)]));
  state=await request('settings',settings);settingsDirty=false;render();toast('设置已保存');
 }

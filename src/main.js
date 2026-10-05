@@ -1,10 +1,12 @@
 'use strict';
+require('./dependencies');
 const { app, BrowserWindow, ipcMain, shell, safeStorage, Tray, Menu, nativeImage, Notification, dialog, screen, net, powerMonitor } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Store } = require('./store');
 const { Connector } = require('./connector');
 const { recommend, taste, dateKey } = require('./engine');
+const {AudioModel}=require('./audio-model');
 const {AudioAnalysis}=require('./analysis');
 const {statistics,recordAnalysis,archiveSongs}=require('./statistics');
 const {clampBounds,dockBounds,bubbleBounds,expandBounds}=require('./floating-layout');
@@ -16,7 +18,7 @@ const appearance=require('./appearance');
 const {LyricsController}=require('./lyrics-controller');
 const recommendationSettings=require('./recommendation-settings');
 const {Assistant}=require('./assistant');
-let assistant,assistantWindow;
+let assistant,assistantWindow,audioModel;
 let lyricService,appearancePreview=null;
 const originalLog = console.log;
 console.log = (...args) => { if (args[0] === '[ERR]') originalLog('[网易云接口暂不可用]'); else originalLog(...args); };
@@ -329,7 +331,8 @@ else {
     connector.enrich=async song=>{const enriched=await originalEnrich(song);if(Date.now()-cacheSavedAt>30000){fs.writeFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),JSON.stringify(Object.fromEntries(connector.cache)));cacheSavedAt=Date.now();}return enriched;};
     const audioHelper=helperWindow('player.html','player-preload.js');playerWindow=audioHelper.window;
     const decoderHelper=helperWindow('decode.html','decode-preload.js');decodeWindow=decoderHelper.window;
-    audioAnalysis=new AudioAnalysis({dataPath:app.getPath('userData'),modelPath:app.isPackaged?path.join(process.resourcesPath,'models','ast'):path.join(__dirname,'..','models','ast'),connector,progress,fetchAudio,onAnalyzed:song=>{if(song.analysisRole==='source'){archiveSongs(store.data,[song]);store.save();}},decode:async bytes=>{
+    audioModel=new AudioModel({dataPath:app.getPath('userData'),legacyPath:app.isPackaged?path.join(process.resourcesPath,'models','ast'):path.join(__dirname,'..','models','ast'),progress});
+    audioAnalysis=new AudioAnalysis({prepareModel:()=>audioModel.ensure(),dataPath:app.getPath('userData'),modelPath:app.isPackaged?path.join(process.resourcesPath,'models','ast'):path.join(__dirname,'..','models','ast'),connector,progress,fetchAudio,onAnalyzed:song=>{if(song.analysisRole==='source'){archiveSongs(store.data,[song]);store.save();}},decode:async bytes=>{
       await decoderHelper.ready;const id=++decodeSequence;
       return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{decodePending.delete(id);reject(new Error('音频解码超时'));},20000);decodePending.set(id,{resolve,reject,timer});decodeWindow.webContents.send('audio:decode',{id,bytes});});
     }});
@@ -410,8 +413,8 @@ else {
             const weights=p.weights||store.data.settings.weights||{};const allowedWeights=Object.keys(require('./engine').WEIGHTS).filter(k=>k!=='artist');if(Object.entries(weights).some(([k,v])=>!allowedWeights.includes(k)||!Number.isFinite(v)||v<0||v>100)||Object.keys(weights).length&&allowedWeights.every(k=>(weights[k]??require('./engine').WEIGHTS[k]*100)===0))throw new Error('请至少保留一项推荐依据');
             const sourcesChanged=JSON.stringify(selected)!==JSON.stringify(store.data.settings.selected)||!!p.includeLikes!==store.data.settings.includeLikes||!!p.includeRecent!==store.data.settings.includeRecent;
             if(sourcesChanged)store.data.settings.analysisStarted=false;
-            store.data.settings = {...store.data.settings,count, exploration, syncHour, selected, favoritePlaylist:target,sourceConfirmed:p.confirmSources?true:store.data.settings.sourceConfirmed,includeLikes:!!p.includeLikes,includeRecent:!!p.includeRecent,avoidKnownArtists:p.avoidKnownArtists!==false,floating:!!p.floating,deepAudio:p.deepAudio!==false,autoUpdate:p.autoUpdate!==false,audioBatch,repeatDays,artistLimit,albumLimit,weights,background: !!p.background, startup: !!p.startup };
-            if(!smoke)app.setLoginItemSettings({ openAtLogin: !!p.startup }); store.save(); setupTray();setupBubble(); value = snapshot(); break;
+            store.data.settings = {...store.data.settings,count, exploration, syncHour, selected, favoritePlaylist:target,sourceConfirmed:p.confirmSources?true:store.data.settings.sourceConfirmed,includeLikes:!!p.includeLikes,includeRecent:!!p.includeRecent,avoidKnownArtists:p.avoidKnownArtists!==false,floating:!!p.floating,deepAudio:p.deepAudio!==false,autoUpdate:p.autoUpdate!==false,installOnQuit:p.installOnQuit!==false,audioBatch,repeatDays,artistLimit,albumLimit,weights,background: !!p.background, startup: !!p.startup };
+            if(!smoke)app.setLoginItemSettings({ openAtLogin: !!p.startup }); store.save();updates.preferences(); setupTray();setupBubble(); value = snapshot(); break;
           }
           case 'favorite': value=await favoriteSong(id(payload?.id),payload?.add);break;
           case 'playerPlay': {
@@ -487,6 +490,6 @@ else {
     powerMonitor.on('resume',()=>{changed();automatic();});win.on('show',()=>{changed();automatic();});
     if(!smoke){setTimeout(()=>{if(store.data.settings.autoUpdate)updates.check();},120000);setInterval(()=>{if(store.data.settings.autoUpdate)updates.check();},14400000).unref();}
   });
-  app.on('before-quit', () => { quitting = true;assistant?.close();audioAnalysis?.close();playerWindow?.destroy();decodeWindow?.destroy();bubble?.destroy();assistantWindow?.destroy(); });
+  app.on('before-quit', () => { quitting = true;assistant?.close();audioModel?.close();audioAnalysis?.close();playerWindow?.destroy();decodeWindow?.destroy();bubble?.destroy();assistantWindow?.destroy(); });
   app.on('window-all-closed', () => app.quit());
 }

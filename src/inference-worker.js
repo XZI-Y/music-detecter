@@ -1,10 +1,11 @@
 'use strict';
+require('./dependencies');
 const { parentPort,workerData }=require('node:worker_threads');
 const {signalFeatures,instrumentFeatures}=require('./audio-features');
 let classifier;
 async function initialize(){
   if(classifier)return classifier;
-  const {pipeline,env}=await import('@huggingface/transformers');
+  const {pipeline,env}=require('@huggingface/transformers');
   env.allowRemoteModels=false;
   classifier=await pipeline('audio-classification',workerData.modelPath,{dtype:'q8',local_files_only:true,session_options:{intraOpNumThreads:2,interOpNumThreads:1}});
   return classifier;

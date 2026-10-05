@@ -6,7 +6,7 @@ class AudioAnalysis {
   save(){fs.writeFileSync(this.file+'.tmp',JSON.stringify(this.cache));fs.renameSync(this.file+'.tmp',this.file);}
   attach(song){return this.cache[song.id]?{...song,features:{...song.features,audio:this.cache[song.id]}}:song;}
   async classify(clips){
-    if(!this.worker){this.worker=new Worker(path.join(__dirname,'inference-worker.js'),{workerData:{modelPath:this.options.modelPath}});this.worker.on('message',r=>{const p=this.pending.get(r.id);if(p){clearTimeout(p.timer);this.pending.delete(r.id);r.error?p.reject(new Error(r.error)):p.resolve(r.audio);}});this.worker.on('error',()=>{for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new Error('音频识别暂不可用'));}this.pending.clear();this.worker=null;});this.worker.unref();}
+    if(!this.worker){if(this.options.prepareModel)this.options.modelPath=await this.options.prepareModel();this.worker=new Worker(path.join(__dirname,'inference-worker.js'),{workerData:{modelPath:this.options.modelPath}});this.worker.on('message',r=>{const p=this.pending.get(r.id);if(p){clearTimeout(p.timer);this.pending.delete(r.id);r.error?p.reject(new Error(r.error)):p.resolve(r.audio);}});this.worker.on('error',()=>{for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new Error('音频识别暂不可用'));}this.pending.clear();this.worker=null;});this.worker.unref();}
     const id=++this.sequence;
     return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);this.worker?.terminate();this.worker=null;reject(new Error('音频识别超时'));},120000);this.pending.set(id,{resolve,reject,timer});this.worker.postMessage({id,clips});});
   }

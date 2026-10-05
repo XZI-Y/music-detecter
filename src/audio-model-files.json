@@ -1,0 +1,17 @@
+[
+  {
+    "name": "config.json",
+    "bytes": 26792,
+    "sha256": "49d0dce922da23685787c73a874d9b1ffa97297f8cc4dc0a4e8bef219725e44d"
+  },
+  {
+    "name": "preprocessor_config.json",
+    "bytes": 297,
+    "sha256": "8d04ba5a9c6fca5d39d0de2b1fd05ecf79deb589fbba279728bbebac39934231"
+  },
+  {
+    "name": "onnx/model_quantized.onnx",
+    "bytes": 90807386,
+    "sha256": "807d244b58a30eaa89f0a721fb841619c696857aabe4eac93769bd0b61497f61"
+  }
+]
