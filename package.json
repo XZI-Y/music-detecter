@@ -1,7 +1,7 @@
 {
   "name": "music-compass",
   "productName": "雷达",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "本地优先的网易云音乐发现助手",
   "author": "Music Compass",
   "license": "MIT",
@@ -22,7 +22,8 @@
       "package.json",
       "README.md",
       "THIRD_PARTY_NOTICES.md",
-      "LICENSE"
+      "LICENSE",
+      "assets/licenses/**/*"
     ],
     "asar": true,
     "win": {
@@ -53,6 +54,10 @@
       {
         "from": "models/ast",
         "to": "models/ast"
+      },
+      {
+        "from": "runtime/llama",
+        "to": "runtime/llama"
       }
     ],
     "asarUnpack": [

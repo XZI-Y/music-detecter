@@ -15,6 +15,8 @@ const {validateAvoidance}=require('./music-types');
 const appearance=require('./appearance');
 const {LyricsController}=require('./lyrics-controller');
 const recommendationSettings=require('./recommendation-settings');
+const {Assistant}=require('./assistant');
+let assistant;
 let lyricService,appearancePreview=null;
 const originalLog = console.log;
 console.log = (...args) => { if (args[0] === '[ERR]') originalLog('[网易云接口暂不可用]'); else originalLog(...args); };
@@ -37,7 +39,7 @@ function uiWindows(){return [win,bubble].filter(w=>w&&!w.isDestroyed());}
 function changed() { for(const w of uiWindows())w.webContents.send('music:changed'); }
 function snapshot() {
   const d = store.data;
-  return { ...d, settings:{...d.settings,appearance:appearancePreview||d.settings.appearance},lyrics:lyricService?.snapshot(), library: undefined, likedIds: undefined, analysisArchive:undefined, seenRecommendations:undefined, daily:dailyStatus(d,!!cookie,busy), musicStatistics:statistics(d), floating:{mode:d.settings.floatingMode||"dock",expanded:!!floatingExpanded}, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
+  return { ...d, settings:{...d.settings,appearance:appearancePreview||d.settings.appearance},lyrics:lyricService?.snapshot(), assistant:assistant?.snapshot(), library: undefined, likedIds: undefined, analysisArchive:undefined, seenRecommendations:undefined, daily:dailyStatus(d,!!cookie,busy), musicStatistics:statistics(d), floating:{mode:d.settings.floatingMode||"dock",expanded:!!floatingExpanded}, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
 }
 function saveCookie(value) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows 安全存储暂不可用，无法安全保存登录。请稍后重试。');
@@ -197,7 +199,7 @@ function createWindow() {
     win.webContents.on('render-process-gone', (_, details) => log('render-process-gone ' + JSON.stringify(details)));
     win.webContents.on('did-fail-load', (_, code, description) => log('did-fail-load ' + code + ' ' + description));
     win.webContents.on('console-message', (_, details) => log('renderer ' + details.message));
-    setTimeout(() => { log('test timed out'); app.exit(1); }, 45000).unref();
+    setTimeout(() => { log('test timed out'); app.exit(1); }, process.argv.includes('--assistant-smoke')?180000:45000).unref();
     win.webContents.on('did-finish-load', async () => {
     try {
       log('did-finish-load');
@@ -217,7 +219,7 @@ function createWindow() {
         fs.writeFileSync(path.join(app.getPath('userData'),'settings.png'),(await win.webContents.capturePage()).toPNG());
         await win.webContents.executeJavaScript('page("lyrics")');await new Promise(r=>setTimeout(r,180));
         fs.writeFileSync(path.join(app.getPath('userData'),'lyrics.png'),(await win.webContents.capturePage()).toPNG());
-        for(const material of ['paper','neon','metal']){
+        for(const material of ['paper','neon','metal','aurora','ceramic','velvet','retro']){
           await win.webContents.executeJavaScript('appearanceDraft={mode:"dark",material:'+JSON.stringify(material)+',hue:275,saturation:60};renderAppearance();page("today")');await new Promise(r=>setTimeout(r,180));
           fs.writeFileSync(path.join(app.getPath('userData'),material+'.png'),(await win.webContents.capturePage()).toPNG());
         }
@@ -228,6 +230,19 @@ function createWindow() {
         await new Promise(r=>setTimeout(r,180));
         fs.writeFileSync(path.join(app.getPath('userData'),'light.png'),(await win.webContents.capturePage()).toPNG());
         await win.webContents.executeJavaScript('appearanceDraft=null;renderAppearance()');
+        await win.webContents.executeJavaScript('page("assistant")');await new Promise(r=>setTimeout(r,180));fs.writeFileSync(path.join(app.getPath('userData'),'assistant.png'),(await win.webContents.capturePage()).toPNG());
+        if(process.argv.includes('--assistant-smoke')){
+          const originalLibrary=store.data.library;store.data.library=Array.from({length:12},(_,i)=>({id:1000+i,name:'虚构验证样本',tags:['爵士','放松'],features:{language:'中文'}}));
+          await win.webContents.executeJavaScript('appearanceDraft={mode:"dark",material:"aurora",hue:210,saturation:45};renderAppearance();page("assistant");$("ai-question").value="请把每次推荐设置为30首，探索比例设置为40";$("ai-form").requestSubmit()');
+          for(let i=0;i<480;i++){if(!assistant.busy&&assistant.messages.length)break;await new Promise(r=>setTimeout(r,250));}
+          if(assistant.busy||assistant.pending?.patch.count!==30||store.data.settings.count!==20)throw new Error('真实 AI 界面建议验证失败：'+assistant.error);
+          await new Promise(r=>setTimeout(r,180));fs.writeFileSync(path.join(app.getPath('userData'),'assistant-live.png'),(await win.webContents.capturePage()).toPNG());
+          await win.webContents.executeJavaScript('document.querySelector("#ai-suggestions .primary").click()');await new Promise(r=>setTimeout(r,300));
+          if(store.data.settings.count!==30||store.data.settings.exploration!==40||assistant.pending)throw new Error('AI 建议应用验证失败');
+          fs.writeFileSync(path.join(app.getPath('userData'),'assistant-test.json'),JSON.stringify({ok:true,count:store.data.settings.count,exploration:store.data.settings.exploration,model:assistant.snapshot().model,answer:assistant.messages.at(-1).text}));
+          assistant.clear();assistant.close();store.data.library=originalLibrary;store.data.settings.count=20;store.data.settings.exploration=30;store.save();
+          await win.webContents.executeJavaScript('window.__previewFixture();page("today")');
+        }
         const fixture=await win.webContents.executeJavaScript('JSON.parse(JSON.stringify(state))');
         store.data.settings.floating=true;setupBubble();
         await new Promise(resolve=>bubble.webContents.once('did-finish-load',resolve));
@@ -296,6 +311,7 @@ else {
     player=new PlayerController({resolve:id=>mediaConnector.playback(id),send:command=>audioHelper.ready.then(()=>playerWindow.webContents.send('player:command',command)),changed:value=>{lyricService.select(value.song?.id||null);for(const w of uiWindows())w.webContents.send('music:player',value);}});
     ipcMain.on('audio:decoded',(event,value)=>{if(event.sender!==decodeWindow.webContents)return;const p=decodePending.get(value.id);if(!p)return;clearTimeout(p.timer);decodePending.delete(value.id);value.error?p.reject(new Error(value.error)):p.resolve(value.clips);});
     ipcMain.on('player:report',(event,value)=>{if(event.sender===playerWindow.webContents)player.report(value).catch(e=>progress(e.message));});
+    assistant=new Assistant({dataPath:app.getPath('userData'),runtimePath:app.isPackaged?path.join(process.resourcesPath,'runtime','llama'):path.join(__dirname,'..','runtime','llama'),data:()=>store.data,changed:value=>{if(win&&!win.isDestroyed())win.webContents.send('music:assistant',value);}});
     updates=configureUpdates({app,settings:()=>store.data.settings,disabled:smoke,notify:value=>{for(const w of uiWindows())w.webContents.send('music:update',value);}});
     ipcMain.handle('music:request', async (event, action, payload) => {
       if (!uiWindows().some(w=>w.webContents===event.sender) || event.senderFrame!==event.sender.mainFrame || !event.senderFrame.url.startsWith('file:')) return { ok: false, error: '请求来源无效' };
@@ -303,6 +319,16 @@ else {
         let value;
         switch (action) {
           case 'state': value = snapshot(); break;
+          case 'assistantInstall': value=await assistant.install();break;
+          case 'assistantAsk': value=await assistant.ask(payload?.text);break;
+          case 'assistantCancel': value=assistant.cancel();break;
+          case 'assistantClear': value=assistant.clear();break;
+          case 'assistantRemove': value=assistant.remove();break;
+          case 'assistantDismiss': value=assistant.dismiss();break;
+          case 'assistantApply': {
+            if(busy)throw new Error('请等待推荐更新完成后应用建议');
+            Object.assign(store.data.settings,assistant.apply(payload?.id));store.save();changed();value=snapshot();break;
+          }
           case 'qr': {
             if (busy) throw new Error('请先等待更新完成');
             if(favoritePending.size)throw new Error('正在同步收藏，请稍后连接');
@@ -326,7 +352,7 @@ else {
                 if (qrKey !== expectedKey || qrGeneration !== expectedGeneration) { value = { code: 800 }; break; }
                 const switchAccount = store.data.profile && store.data.profile.id !== profile.id;
                 saveCookie(r.cookie);
-                if (switchAccount) { const settings = { ...store.data.settings, selected: [] }; store.clear(); store.data.settings = settings; candidateCache = []; connector.cache.clear(); }
+                if (switchAccount) { assistant.clear(); const settings = { ...store.data.settings, selected: [] }; store.clear(); store.data.settings = settings; candidateCache = []; connector.cache.clear(); }
                 store.data.profile = profile; store.save(); qrKey = ''; changed();
                 store.data.settings.sourceConfirmed=false;store.data.settings.analysisStarted=false;store.save();changed();
               }
@@ -416,11 +442,11 @@ else {
             if (!target.canceled) fs.writeFileSync(target.filePath, history.songs.map(s => `${s.name} — ${s.artists.map(a => a.name).join(' / ')}\r\nhttps://music.163.com/#/song?id=${s.id}`).join('\r\n\r\n'), 'utf8');
             value = !target.canceled; break;
           }
-          case 'logout': if (busy||favoritePending.size) throw new Error('请等待当前操作完成后退出');player.stop();lyricService.clear(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); value = snapshot(); break;
+          case 'logout': if (busy||favoritePending.size) throw new Error('请等待当前操作完成后退出');player.stop();lyricService.clear();assistant.clear(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); value = snapshot(); break;
           case 'clear': {
             if (busy||favoritePending.size) throw new Error('请等待当前操作完成后清除');
             const answer = await dialog.showMessageBox(win, { type: 'question', buttons: ['取消', '清除'], defaultId: 0, cancelId: 0, title: '清除本地数据', message: '清除账号连接、历史歌单和反馈？', detail: '网易云账号里的歌曲和歌单不会受影响。' });
-            if (answer.response === 1) {player.stop();lyricService.clear(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); if(!smoke)app.setLoginItemSettings({ openAtLogin: false }); store.clear(); candidateCache = []; connector.cache.clear();audioAnalysis.clear();fs.writeFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),'{}');setupTray();setupBubble(); }
+            if (answer.response === 1) {player.stop();lyricService.clear();assistant.clear(); cookie = ''; qrKey = ''; qrGeneration++; if (fs.existsSync(credentialPath())) fs.unlinkSync(credentialPath()); if(!smoke)app.setLoginItemSettings({ openAtLogin: false }); store.clear(); candidateCache = []; connector.cache.clear();audioAnalysis.clear();fs.writeFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),'{}');setupTray();setupBubble(); }
             value = snapshot(); break;
           }
           default: throw new Error('不支持的操作');
@@ -433,6 +459,6 @@ else {
     powerMonitor.on('resume',()=>{changed();automatic();});win.on('show',()=>{changed();automatic();});
     if(!smoke){setTimeout(()=>{if(store.data.settings.autoUpdate)updates.check();},120000);setInterval(()=>{if(store.data.settings.autoUpdate)updates.check();},14400000).unref();}
   });
-  app.on('before-quit', () => { quitting = true;audioAnalysis?.close();playerWindow?.destroy();decodeWindow?.destroy();bubble?.destroy(); });
+  app.on('before-quit', () => { quitting = true;assistant?.close();audioAnalysis?.close();playerWindow?.destroy();decodeWindow?.destroy();bubble?.destroy(); });
   app.on('window-all-closed', () => app.quit());
 }

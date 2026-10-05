@@ -1,3 +1,4 @@
+runtime/llama/
 node_modules/
 dist/
 build-cache/

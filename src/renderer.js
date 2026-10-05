@@ -4,7 +4,7 @@ function element(tag,cls,text){const e=document.createElement(tag);if(cls)e.clas
 function toast(text){$('toast').textContent=text;$('toast').classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.add('hidden'),6000);}
 async function request(action,data){const r=await window.music.request(action,data);if(!r.ok)throw new Error(r.error);return r.data;}
 async function run(fn){try{return await fn();}catch(e){toast(e.message);return null;}}
-function page(name){if(currentPage!==name)window.scrollTo(0,0);currentPage=name;document.querySelectorAll('.page').forEach(e=>e.classList.toggle('hidden',e.id!=='page-'+name));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===name));$('page-label').textContent={today:'今日推荐',taste:'偏好统计',history:'历史歌单',settings:'设置',lyrics:'正在播放 · 歌词'}[name];if(name==='lyrics'){lyricActive=-2;renderLyricPosition();}}
+function page(name){if(currentPage!==name)window.scrollTo(0,0);currentPage=name;document.querySelectorAll('.page').forEach(e=>e.classList.toggle('hidden',e.id!=='page-'+name));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===name));$('page-label').textContent={today:'今日推荐',taste:'偏好统计',history:'历史歌单',settings:'设置',lyrics:'正在播放 · 歌词',assistant:'音乐助手'}[name];if(name==='lyrics'){lyricActive=-2;renderLyricPosition();}}
 function time(seconds){return Math.floor(seconds/60)+':'+String(Math.floor(seconds%60)).padStart(2,'0');}
 function setBusy(busy){localBusy=busy;$('progress').classList.toggle('hidden',!busy);for(const id of ['generate','qr-start','load-playlists','logout','clear','analyze-more','start-analysis'])$(id).disabled=busy;$('settings-form').querySelectorAll('input,select,button').forEach(e=>{if(!['check-update','download-update','install-update'].includes(e.id))e.disabled=busy;});}
 function saved(songId){return state.favorites?.[state.settings.favoritePlaylist]?.includes(songId);}
@@ -84,7 +84,7 @@ $('player-lyric').onclick=()=>{lyricActive=-2;page('lyrics');};$('lyric-lines').
 $('reload-lyrics').onclick=()=>run(async()=>renderLyrics(await request('lyricsRetry')));
 function renderUpdate(value){if(!value)return;$('update-status').textContent=value.message;$('download-update').classList.toggle('hidden',value.status!=='available');$('install-update').classList.toggle('hidden',value.status!=='ready');}
 function render(){
- renderAppearance();renderLyrics(state.lyrics||currentLyrics);if(document.activeElement!==$('recommend-count'))$('recommend-count').value=state.settings.count;$('save-count').disabled=$('recommend-count').disabled=!!state.busy;
+ window.renderAssistant?.(state.assistant);renderAppearance();renderLyrics(state.lyrics||currentLyrics);if(document.activeElement!==$('recommend-count'))$('recommend-count').value=state.settings.count;$('save-count').disabled=$('recommend-count').disabled=!!state.busy;
  $('account-name').textContent=state.connected?state.profile?.name||'已连接':'未连接网易云';$('version-label').textContent='v'+state.version;$('date-label').textContent=state.today;
  $('connection-text').textContent=state.connected?'已连接 '+(state.profile?.name||'网易云账号'):'用手机网易云音乐扫码连接。';$('logout').classList.toggle('hidden',!state.connected);$('qr-start').textContent=state.connected?'重新连接':'扫码连接';
  $('step-connect').classList.toggle('complete',state.connected);$('step-select').classList.toggle('complete',state.settings.sourceConfirmed);$('step-start').classList.toggle('complete',!!state.lastSync);$('source-status').textContent=state.settings.sourceConfirmed?'选择已保存':'选择后点击保存';
@@ -215,9 +215,14 @@ window.__smokeTest=async()=>{
  const filter=$('statistics-grid').querySelector('.avoid-option input');const type=filter.nextSibling.textContent;filter.checked=true;filter.onchange();await $('save-avoid').onclick();check('统计筛选通过控件保存到本地',(await request('state')).settings.avoidTypes.instruments.includes(type));
  await $('reset-avoid').onclick();check('取消类型筛选恢复默认',Object.values((await request('state')).settings.avoidTypes).flat().length===0);
  $('recommend-count').value=7;await $('save-count').onclick();check('首页可独立保存任意推荐数量',(await request('state')).settings.count===7);await request('recommendationCount',{count:20});const badCount=await window.music.request('recommendationCount',{count:101});check('拒绝越界推荐数量',!badCount.ok);
- const surfaces=[];for(const material of ['smooth','glass','flat','paper','neon','metal']){RadarAppearance.apply({mode:'dark',material,hue:210,saturation:45});surfaces.push(getComputedStyle(document.querySelector('.hero')).backgroundImage);}check('六种材质表面彼此区分',new Set(surfaces).size===6);
+ const surfaces=[];for(const material of ['smooth','glass','flat','paper','neon','metal','aurora','ceramic','velvet','retro']){RadarAppearance.apply({mode:'dark',material,hue:210,saturation:45});surfaces.push(getComputedStyle(document.querySelector('.hero')).backgroundImage);}check('十种材质表面彼此区分',new Set(surfaces).size===10);
  const badAppearance=await window.music.request('appearance',{hue:999});check('拒绝无效外观设置',!badAppearance.ok);
  const badFilter=await window.music.request('avoidance',{types:{arbitrary:['bad']},strength:85});check('拒绝无效筛选因子',!badFilter.ok);
+ page('assistant');check('免费助手无需填写密钥',!document.querySelector('#page-assistant input[type=password]')&&$('ai-install').textContent.includes('免费'));
+ const badAI=await window.music.request('assistantAsk',{text:' '});check('空问题明确报错',!badAI.ok);
+ const aiBefore=(await request('state')).settings.count;const badProposal=await window.music.request('assistantApply',{id:'expired'});check('过期AI建议不能更改设置',!badProposal.ok&&(await request('state')).settings.count===aiBefore);
+ window.renderAssistant({installed:true,model:'界面测试',busy:false,phase:'ready',messages:[{role:'assistant',text:'<img src=x onerror=alert(1)>'}],pending:{id:'expired',changes:[{label:'推荐数量',before:20,after:30}]}});check('助手回答安全显示且建议需确认',$('ai-messages').textContent.includes('<img src=x')&&!$('ai-messages').querySelector('img')&&$('ai-suggestions').querySelector('.primary').textContent.includes('应用'));
+ window.renderAssistant((await request('assistantClear')));check('清空对话生效',!$('ai-messages').querySelector('.ai-message'));
  await refresh();page('today');return {ok:checks.every(c=>c.pass),checks};
 };
 run(refresh);
