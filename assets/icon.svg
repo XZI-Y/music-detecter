@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+ <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1C514B"/><stop offset=".52" stop-color="#123A37"/><stop offset="1" stop-color="#0A2329"/></linearGradient>
+ <linearGradient id="note" x1="0" y1="0" x2=".65" y2="1"><stop stop-color="#F0FFF4"/><stop offset=".5" stop-color="#C2F5D6"/><stop offset="1" stop-color="#79D9B6"/></linearGradient>
+ <linearGradient id="scan" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#80E8BD" stop-opacity="0"/><stop offset="1" stop-color="#80E8BD" stop-opacity=".22"/></linearGradient>
+ <linearGradient id="rings" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#4D9181" stop-opacity=".6"/><stop offset="1" stop-color="#9ADBBC" stop-opacity=".85"/></linearGradient>
+</defs>
+<rect x="40" y="40" width="944" height="944" rx="228" fill="url(#tile)"/>
+<rect x="43" y="43" width="938" height="938" rx="225" fill="none" stroke="#BFF4D3" stroke-opacity=".12" stroke-width="6"/>
+<path d="M512 512L512 194A318 318 0 0 1 787 353Z" fill="url(#scan)"/>
+<g fill="none" stroke="url(#rings)" stroke-linecap="round">
+ <path d="M805 416A318 318 0 1 0 664 791" stroke-width="24"/>
+ <path d="M717 430A222 222 0 1 0 603 715" stroke-width="18" opacity=".68"/>
+</g>
+<circle cx="282" cy="292" r="25" fill="#EDDFB0"/>
+<circle cx="282" cy="292" r="45" fill="none" stroke="#EDDFB0" stroke-opacity=".16" stroke-width="10"/>
+<g fill="url(#note)">
+ <path d="M425 376Q425 360 443 354L690 274Q716 265 716 292V565H659V379L482 435V651H425Z"/>
+ <ellipse cx="392" cy="658" rx="80" ry="57" transform="rotate(-18 392 658)"/>
+ <ellipse cx="626" cy="575" rx="80" ry="57" transform="rotate(-18 626 575)"/>
+</g>
+<path d="M455 380L685 305" fill="none" stroke="#FFF" stroke-opacity=".25" stroke-width="9" stroke-linecap="round"/>
+</svg>
