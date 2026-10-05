@@ -4,6 +4,7 @@ function nextDaily(now,hour,todayReady){
  const date=dateKey(now),due=Date.parse(date+'T'+String(hour).padStart(2,'0')+':00:00+08:00');
  return new Date(todayReady?due+86400000:due).toISOString();
 }
+function dailyRetry(data,now=new Date()){return data.dailyUpdate?.status==='error'&&data.dailyUpdate.date===dateKey(now);}
 function dailyStatus(data,connected,busy,now=new Date()){
  const today=dateKey(now),list=data.history.find(h=>h.date===today),attempt=data.dailyUpdate||{};
  const nextAt=nextDaily(now,data.settings.syncHour,!!list);
@@ -22,4 +23,4 @@ function recordSeen(data,songs,at=new Date().toISOString()){
  for(const song of songs)if(!records.has(song.id)||Date.parse(records.get(song.id).at)<Date.parse(at))records.set(song.id,{id:song.id,identity:identity(song),at});
  data.seenRecommendations=[...records.values()].sort((a,b)=>Date.parse(a.at)-Date.parse(b.at)).slice(-15000);
 }
-module.exports={dailyStatus,nextDaily,recordSeen};
+module.exports={dailyStatus,nextDaily,recordSeen,dailyRetry};

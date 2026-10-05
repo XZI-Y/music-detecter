@@ -10,7 +10,7 @@ const {statistics,recordAnalysis,archiveSongs}=require('./statistics');
 const {clampBounds,dockBounds,bubbleBounds,expandBounds}=require('./floating-layout');
 const {PlayerController}=require('./player-controller');
 const {configureUpdates}=require('./updater');
-const {dailyStatus,recordSeen}=require('./daily');
+const {dailyStatus,recordSeen,dailyRetry}=require('./daily');
 const {validateAvoidance}=require('./music-types');
 const appearance=require('./appearance');
 const originalLog = console.log;
@@ -170,8 +170,9 @@ function setupTray() {
 async function automatic() {
   if (smoke || busy || !cookie || !store.data.settings.sourceConfirmed || !store.data.settings.analysisStarted || Date.now() < nextAttempt || (store.data.dailyUpdate?.status==='error'&&Date.now()<Date.parse(store.data.dailyUpdate.nextRetryAt))) return;
   const hour = Number(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Shanghai', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
-  if (hour < store.data.settings.syncHour) return;
-  if(store.data.history.some(h=>h.date===dateKey())){
+  const retry=dailyRetry(store.data);
+  if (hour < store.data.settings.syncHour&&!retry) return;
+  if(store.data.history.some(h=>h.date===dateKey())&&!retry){
     if(store.data.settings.deepAudio&&store.data.analysis.pending>0&&Date.now()>backgroundAnalysisAt){backgroundAnalysisAt=Date.now()+600000;try{await analyzeMore();}catch(e){progress(e.message);}}
     return;
   }

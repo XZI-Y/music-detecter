@@ -34,3 +34,5 @@ test('每日状态遵守北京时间、计划时间、更新成功及失败重�
  d.dailyUpdate={date:'2026-10-05',status:'error',message:'没有新的候选',nextRetryAt:'2026-10-05T03:05:00Z'};const error=dailyStatus(d,true,false,new Date('2026-10-05T03:00:00Z'));assert.equal(error.status,'error');assert.equal(error.message,'没有新的候选');assert.ok(error.updatedAt);
  d.dailyUpdate.status='updating';assert.equal(dailyStatus(d,true,true,new Date('2026-10-05T03:00:00Z')).status,'updating');
 });
+
+test("当日手动换歌失败也进入重试，不被已存在歌单或计划时间挡住",()=>{const {dailyRetry}=require("../src/daily"),d=defaults(),now=new Date("2026-10-05T00:00:00+08:00");d.history=[{date:"2026-10-05",songs:[]}];d.dailyUpdate={status:"error",date:"2026-10-05"};assert.equal(dailyRetry(d,now),true);d.dailyUpdate.status="success";assert.equal(dailyRetry(d,now),false);d.dailyUpdate={status:"error",date:"2026-10-04"};assert.equal(dailyRetry(d,now),false);});
