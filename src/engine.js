@@ -27,7 +27,11 @@ function normalize(s, tags = []) {
 function overlap(a = [], b = []) { if (!a.length || !b.length) return null; return a.filter(x => b.includes(x)).length / Math.min(a.length, b.length); }
 function dateKey(now = new Date()) { return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now); }
 function hash(str) { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
-function rankSong(song, seeds, feedback = {}) {
+function effectiveWeights(settings={}) {
+ const result={...WEIGHTS};for(const key of Object.keys(result))if(key!=="artist"&&Number.isFinite(settings.weights?.[key]))result[key]=Math.max(0,Math.min(100,settings.weights[key]))/100;const sum=Object.values(result).reduce((a,b)=>a+b,0);return sum?Object.fromEntries(Object.entries(result).map(([k,v])=>[k,v/sum])):WEIGHTS;
+}
+function rankSong(song, seeds, feedback = {}, settings = {}) {
+ const weights=effectiveWeights(settings);
   let best = { score: 0, reasons: [], breakdown: {}, seedId: null };
   for (const seed of seeds) {
     const sameArtist = song.artists.some(a => a.id && seed.artists.some(b => a.id === b.id));
@@ -43,7 +47,7 @@ function rankSong(song, seeds, feedback = {}) {
       ...audioSimilarity(f,sf)
     };
     let evidence = 0, total = 0;
-    for (const [k, value] of Object.entries(parts)) if (value !== null) { total += value * WEIGHTS[k]; evidence += WEIGHTS[k]; }
+    for (const [k, value] of Object.entries(parts)) if (value !== null) { total += value * weights[k]; evidence += weights[k]; }
     // Missing evidence never increases artist influence; reliability discounts sparse matches.
     const score = evidence ? total / evidence * (.45 + .55 * Math.min(1, evidence / .80)) : 0;
     const reasons = [];
@@ -68,12 +72,12 @@ function identity(song) { return (song.name || '').toLowerCase().replace(/[（(]
 function recommend(candidates, data, date = dateKey(), omit = [], existing = []) {
   const seeds = data.library.filter(s => data.feedback[s.id]?.value !== 'dislike' && !s.artists.some(a => data.blockedArtists.includes(a.id))).map(s => ({ ...s, localLiked: data.feedback[s.id]?.value === 'like' }));
   const known = new Set([...data.likedIds, ...seeds.map(s => s.id), ...omit]);
-  const cutoff = Date.parse(date + 'T00:00:00+08:00') - 14 * 86400000;
+  const cutoff = Date.parse(date + 'T00:00:00+08:00') - (data.settings.repeatDays||14) * 86400000;
   const recent = new Set(data.history.filter(h => h.date !== date && Date.parse(h.date + 'T00:00:00+08:00') >= cutoff).flatMap(h => h.songs.map(s => s.id)));
   const blocked = new Set(data.blockedArtists);
   const knownArtists=new Set(data.library.flatMap(s=>s.artists.map(a=>a.id).filter(Boolean)));
   const unique = new Map();
-  for (const s of candidates) if (!known.has(s.id) && !recent.has(s.id) && !s.unavailable && data.feedback[s.id]?.value !== 'dislike' && data.feedback[s.id]?.value !== 'like' && !s.artists.some(a => blocked.has(a.id) || (data.settings.avoidKnownArtists!==false&&knownArtists.has(a.id)))) unique.set(s.id, { ...s, ...rankSong(s, seeds, data.feedback) });
+  for (const s of candidates) if (!known.has(s.id) && !recent.has(s.id) && !s.unavailable && data.feedback[s.id]?.value !== 'dislike' && data.feedback[s.id]?.value !== 'like' && !s.artists.some(a => blocked.has(a.id) || (data.settings.avoidKnownArtists!==false&&knownArtists.has(a.id)))) unique.set(s.id, { ...s, ...rankSong(s, seeds, data.feedback, data.settings) });
   const pool = [...unique.values()].sort((a, b) => b.score - a.score || hash(date + a.id) - hash(date + b.id));
   const chosen = [], artistCounts = new Map(), albumCounts = new Map(), identities = new Set();
   for (const song of existing) {
@@ -87,7 +91,7 @@ function recommend(candidates, data, date = dateKey(), omit = [], existing = [])
     let bestIndex = -1, bestUtility = -Infinity;
     for (let i = 0; i < pool.length; i++) {
       const s = pool[i];
-      if (identities.has(identity(s)) || s.artists.some(a => (artistCounts.get(a.id) || 0) >= (data.settings.avoidKnownArtists===false?2:1)) || (s.albumId && (albumCounts.get(s.albumId) || 0) >= 2)) continue;
+      if (identities.has(identity(s)) || s.artists.some(a => (artistCounts.get(a.id) || 0) >= (data.settings.artistLimit||1)) || (s.albumId && (albumCounts.get(s.albumId) || 0) >= (data.settings.albumLimit||2))) continue;
       const repeatedArtist = Math.max(0, ...s.artists.map(a => artistCounts.get(a.id) || 0));
       const sharedTags = chosen.length ? Math.max(0, ...chosen.map(c => overlap(c.tags, s.tags) || 0)) : 0;
       const novelty = hash(date + ':' + s.id) / 4294967295;
@@ -108,4 +112,4 @@ function taste(library) {
   for (const s of library) for (const tag of s.tags || []) counts[tag] = (counts[tag] || 0) + 1;
   return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([tag, count]) => ({ tag, count }));
 }
-module.exports = { WEIGHTS, lexicalFeatures, normalize, rankSong, recommend, taste, dateKey, hash, identity };
+module.exports = { WEIGHTS, effectiveWeights, lexicalFeatures, normalize, rankSong, recommend, taste, dateKey, hash, identity };

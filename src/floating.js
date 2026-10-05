@@ -1,15 +1,24 @@
-const $=id=>document.getElementById(id);let state,player,expanded=false,collapseTimer,dragging=false;
+const $=id=>document.getElementById(id);let state,player,mode='dock',expanded=false,collapseTimer,seeking=false,drag=null,moveFrame=null,lastPoint=null;
 async function request(action,data){const r=await window.music.request(action,data);if(!r.ok){$('message').textContent=r.error;throw new Error(r.error);}return r.data;}
 function time(seconds){return Math.floor(seconds/60)+':'+String(Math.floor(seconds%60)).padStart(2,'0');}
-function render(p){player=p;$('title').textContent=p.song?.name||'选择一首歌开始播放';$('artist').textContent=p.song?.artists?.map(a=>a.name).join(' / ')||'你的每日音乐';$('toggle').textContent=p.paused?'▶':'Ⅱ';$('bubble').classList.toggle('playing',!p.paused);$('elapsed').textContent=time(p.time);$('duration').textContent=time(p.duration);if(!dragging){$('seek').max=p.duration||1;$('seek').value=p.time;}$('mode').textContent=p.mode==='shuffle'?'⤨':'→';$('mode').title=p.mode==='shuffle'?'随机播放':'顺序播放';$('message').textContent=p.error|| (p.trial?'当前音源为试听':'');const saved=!!state?.favorites?.[state.settings.favoritePlaylist]?.includes(p.song?.id);$('heart').textContent=saved?'♥':'♡';$('heart').classList.toggle('favorite',saved);}
-async function refresh(){state=await request('state');if(state.player)render(state.player);$('suggestions').replaceChildren();const today=state.history.find(h=>h.date===state.today);for(const song of (today?.songs||[]).filter(s=>s.id!==player?.song?.id).slice(0,3)){const button=document.createElement('button');button.textContent='▶ '+song.name;button.onclick=()=>request('playerPlay',{id:song.id,date:today.date}).catch(()=>{});$('suggestions').append(button);}}
-document.body.onmouseenter=()=>{clearTimeout(collapseTimer);if(!expanded){expanded=true;document.body.classList.add('expanded');request('bubbleExpand',{expanded:true}).catch(()=>{});}};
-document.body.onmouseleave=()=>{if(dragging)return;collapseTimer=setTimeout(()=>{expanded=false;document.body.classList.remove('expanded');request('bubbleExpand',{expanded:false}).catch(()=>{});},650);};
+function applyLayout(value){mode=value.mode;expanded=!!value.expanded;document.body.classList.toggle('docked',mode==='dock');document.body.classList.toggle('expanded',expanded);}
+function render(p){if(!p)return;player=p;$('title').textContent=p.song?.name||'选择一首歌开始播放';$('artist').textContent=p.song?.artists?.map(a=>a.name).join(' / ')||'雷达 · 每日音乐';$('toggle').textContent=p.paused?'▶':'Ⅱ';$('bubble').classList.toggle('playing',!p.paused);$('elapsed').textContent=time(p.time);$('duration').textContent=time(p.duration);if(!seeking){$('seek').max=p.duration||1;$('seek').value=p.time;}$('mode').textContent=p.mode==='shuffle'?'⤨':'→';$('mode').title=p.mode==='shuffle'?'随机播放':'顺序播放';$('message').textContent=p.error||(p.loading?'正在加载…':p.trial?'当前音源为试听':'');const saved=!!state?.favorites?.[state.settings.favoritePlaylist]?.includes(p.song?.id);$('heart').textContent=saved?'♥':'♡';$('heart').classList.toggle('favorite',saved);}
+function suggestions(){ $('suggestions').replaceChildren();const today=state.history.find(h=>h.date===state.today);for(const song of (today?.songs||[]).filter(s=>s.id!==player?.song?.id).slice(0,3)){const button=document.createElement('button');button.textContent='▶ '+song.name;button.onclick=()=>request('playerPlay',{id:song.id,date:today.date}).catch(()=>{});$('suggestions').append(button);} }
+async function refresh(){state=await request('state');applyLayout(state.floating);render(state.player);suggestions();}
+async function expand(value){if(mode==='dock')return;expanded=value;document.body.classList.toggle('expanded',value);await request('bubbleExpand',{expanded:value});}
+document.body.onmouseenter=()=>{clearTimeout(collapseTimer);if(!drag)expand(true).catch(()=>{});};
+document.body.onmouseleave=()=>{if(seeking||drag)return;clearTimeout(collapseTimer);collapseTimer=setTimeout(()=>expand(false).catch(()=>{}),900);};
+for(const id of ['drag-handle','bubble']){
+ const target=$(id);
+ target.onpointerdown=e=>{if(e.button!==0)return;clearTimeout(collapseTimer);drag={x:e.screenX,y:e.screenY,moved:false,id:e.pointerId};target.setPointerCapture(e.pointerId);request('floatingDrag',{phase:'start',x:e.screenX,y:e.screenY}).catch(()=>{});};
+ target.onpointermove=e=>{if(!drag)return;const point={x:e.screenX,y:e.screenY};if(Math.hypot(point.x-drag.x,point.y-drag.y)<6&&!drag.moved)return;drag.moved=true;lastPoint=point;if(!moveFrame)moveFrame=requestAnimationFrame(()=>{moveFrame=null;request('floatingDrag',{phase:'move',...lastPoint}).catch(()=>{});});};
+ const finish=e=>{if(!drag)return;const moved=drag.moved;drag=null;if(moveFrame){cancelAnimationFrame(moveFrame);moveFrame=null;}if(target.hasPointerCapture(e.pointerId))target.releasePointerCapture(e.pointerId);if(moved)request('floatingDrag',{phase:'end',x:e.screenX,y:e.screenY}).catch(()=>{});else if(id==='bubble')expand(true).catch(()=>{});};
+ target.onpointerup=finish;target.onpointercancel=finish;
+}
 for(const [id,type] of [['toggle','toggle'],['previous','previous'],['next','next']])$(id).onclick=()=>request('playerCommand',{type}).catch(()=>{});
 $('mode').onclick=()=>request('playerCommand',{type:'mode',value:player?.mode==='shuffle'?'sequence':'shuffle'}).catch(()=>{});
 $('heart').onclick=async()=>{if(!player?.song)return;$('heart').disabled=true;try{await request('favorite',{id:player.song.id,add:!state?.favorites?.[state.settings.favoritePlaylist]?.includes(player.song.id)});await refresh();}catch{}finally{$('heart').disabled=false;}};
-$('seek').onpointerdown=()=>{dragging=true;};$('seek').onchange=()=>{request('playerCommand',{type:'seek',value:Number($('seek').value)}).catch(()=>{});dragging=false;};$('seek').onpointerup=()=>{dragging=false;};
-$('open').onclick=()=>request('openWindow').catch(()=>{});
-window.music.onPlayer(render);window.music.onChanged(()=>refresh().catch(()=>{}));refresh().catch(()=>{});
-
-window.__previewFixture=value=>{state=value;render(value.player);document.body.classList.add("expanded");};
+$('seek').onpointerdown=()=>{seeking=true;clearTimeout(collapseTimer);};$('seek').onchange=()=>{request('playerCommand',{type:'seek',value:Number($('seek').value)}).catch(()=>{});seeking=false;};$('seek').onpointerup=()=>{seeking=false;};
+$('open').onclick=()=>request('openWindow').catch(()=>{});$('dock').onclick=()=>request('floatingDock').catch(()=>{});
+window.music.onPlayer(render);window.music.onChanged(()=>refresh().catch(()=>{}));window.music.onFloating(applyLayout);refresh().catch(()=>{});
+window.__previewFixture=value=>{state=value;applyLayout(value.floating||{mode:'bubble',expanded:true});render(value.player);suggestions();};

@@ -4,7 +4,7 @@ function element(tag,cls,text){const e=document.createElement(tag);if(cls)e.clas
 function toast(text){$('toast').textContent=text;$('toast').classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.add('hidden'),6000);}
 async function request(action,data){const r=await window.music.request(action,data);if(!r.ok)throw new Error(r.error);return r.data;}
 async function run(fn){try{return await fn();}catch(e){toast(e.message);return null;}}
-function page(name){currentPage=name;document.querySelectorAll('.page').forEach(e=>e.classList.toggle('hidden',e.id!=='page-'+name));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===name));$('page-label').textContent={today:'今日推荐',taste:'我的音乐',history:'历史歌单',settings:'设置'}[name];}
+function page(name){currentPage=name;document.querySelectorAll('.page').forEach(e=>e.classList.toggle('hidden',e.id!=='page-'+name));document.querySelectorAll('.nav').forEach(e=>e.classList.toggle('active',e.dataset.page===name));$('page-label').textContent={today:'今日推荐',taste:'偏好统计',history:'历史歌单',settings:'设置'}[name];}
 function time(seconds){return Math.floor(seconds/60)+':'+String(Math.floor(seconds%60)).padStart(2,'0');}
 function setBusy(busy){localBusy=busy;$('progress').classList.toggle('hidden',!busy);for(const id of ['generate','qr-start','load-playlists','logout','clear','analyze-more','start-analysis'])$(id).disabled=busy;$('settings-form').querySelectorAll('input,select,button').forEach(e=>{if(!['check-update','download-update','install-update'].includes(e.id))e.disabled=busy;});}
 function saved(songId){return state.favorites?.[state.settings.favoritePlaylist]?.includes(songId);}
@@ -53,6 +53,8 @@ function renderPlaylists(){
 function renderSettings(){
  if(settingsDirty)return;renderPlaylists();
  for(const [id,key] of [['setting-likes','includeLikes'],['setting-recent','includeRecent'],['setting-avoid','avoidKnownArtists'],['setting-audio','deepAudio'],['setting-floating','floating'],['setting-background','background'],['setting-startup','startup'],['setting-update','autoUpdate']])$(id).checked=!!state.settings[key];
+ for(const [id,key] of [['setting-batch','audioBatch'],['setting-repeat','repeatDays'],['setting-artist-limit','artistLimit'],['setting-album-limit','albumLimit']])$(id).value=state.settings[key];
+ for(const [key,[name,value]] of Object.entries(WEIGHT_FIELDS)){const input=$('weight-'+key);input.value=state.settings.weights?.[key]??value;input.previousElementSibling.textContent=input.value;}
  $('setting-count').value=state.settings.count;$('setting-hour').value=state.settings.syncHour;$('setting-exploration').value=state.settings.exploration;$('exploration-value').textContent=state.settings.exploration+'%';
 }
 function renderPlayer(p){
@@ -71,14 +73,28 @@ function render(){
  const a=state.analysis||{metadata:state.libraryCount,lyrics:0,audio:0,pending:0};
  $('taste-stats').replaceChildren(...[[a.metadata,'已读取的歌曲'],[a.audio,'已识别音频特征'],[a.lyrics,'已提取歌词线索']].map(([value,label])=>{const card=element('div','stat');card.append(element('strong','',value),element('span','',label));return card;}));
  $('analysis-text').textContent=a.metadata?('已读取 '+a.metadata+' 首，音频特征已分析 '+a.audio+' 首'+(a.pending?'，其余 '+a.pending+' 首将继续分批分析。':'。')):'选择歌单后开始分析。';
- $('taste-tags').replaceChildren(...(state.taste.length?state.taste.map(t=>element('span','tag',t.tag)):[element('p','muted','还没有风格资料。')]));
+ $('taste-tags').replaceChildren();renderStatistics();
 }
+const WEIGHT_FIELDS={relation:['歌曲关联',18],style:['歌单风格',13],mood:['歌词情绪',5],theme:['歌词主题',5],language:['歌词语言',3],era:['发行年代',2],duration:['歌曲时长',2],feedback:['爱心反馈',8],instruments:['乐器',20],rhythm:['节奏',8],timbre:['音色',6],harmony:['音高色彩',4],dynamics:['强弱变化',3],vocal:['人声',3]};
+function createWeightControls(){for(const [key,[name,value]] of Object.entries(WEIGHT_FIELDS)){const label=element('label','weight-control',name),output=element('output','',value),input=element('input');input.type='range';input.id='weight-'+key;input.min=0;input.max=100;input.step=1;input.value=value;input.oninput=()=>{output.textContent=input.value;};label.append(output,input);$('weight-controls').append(label);}}
+function renderStatistics(){
+ const scope=$('statistics-scope').value||'current',stats=state.musicStatistics?.[scope];$('statistics-grid').replaceChildren();$('analysis-runs').replaceChildren();
+ if(!stats){$('statistics-grid').append(element('p','muted','分析歌单后，你的偏好会显示在这里。'));return;}
+ $('taste-stats').replaceChildren(...[[stats.total,scope==='archive'?'累计记录的歌曲':'当前来源歌曲'],[stats.audio,'已识别音频特征'],[stats.lyrics,'已提取歌词线索']].map(([value,label])=>{const card=element('div','stat');card.append(element('strong','',value),element('span','',label));return card;}));
+ for(const group of Object.values(stats.groups)){const panel=element('section','panel'),title=element('h2','',group.title);panel.append(title,element('p','stat-coverage','有效样本 '+group.known+' / '+group.total+' 首 · '+group.unknown+' 首暂无结果'+(group.multiple?' · 同曲可有多项':'')));
+  if(!group.rows.length)panel.append(element('p','muted','继续分析后会逐步补充。'));
+  const rows=element('div');for(const [index,row] of group.rows.entries()){const item=element('div','stat-row'),head=element('div','stat-row-head');head.append(element('span','',row.name),element('small','',row.percent+'% · '+row.count+' 首'));const track=element('div','stat-track'),fill=element('div','stat-fill');fill.style.width=Math.max(0,Math.min(100,row.percent))+'%';track.append(fill);item.append(head,track);if(index>=8)item.classList.add('hidden');rows.append(item);}panel.append(rows);if(group.rows.length>8){const more=element('button','text-button','显示全部 '+group.rows.length+' 项');more.onclick=()=>{rows.querySelectorAll('.hidden').forEach(r=>r.classList.remove('hidden'));more.remove();};panel.append(more);}$('statistics-grid').append(panel);
+ }
+ const runs=state.musicStatistics.runs||[];for(const r of runs.slice(0,12)){const row=element('div','run-row');row.append(element('span','',new Date(r.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})),element('span','',r.total+' 首 · 音频 '+r.audio+' 首 · 歌词 '+r.lyrics+' 首'));$('analysis-runs').append(row);}if(!runs.length)$('analysis-runs').append(element('p','muted','完成分析后会记录时间和进度。'));
+}
+
 async function refresh(){state=await request('state');render();}
 async function loadPlaylists(){await request('playlists');settingsDirty=false;await refresh();}
 async function saveSettings(){
  const selected=[...$('playlist-list').querySelectorAll('input:checked')].map(e=>Number(e.value));
  const settings={count:Number($('setting-count').value),exploration:Number($('setting-exploration').value),syncHour:Number($('setting-hour').value),selected,favoritePlaylist:Number($('favorite-playlist').value)||null,confirmSources:true};
  for(const [id,key] of [['setting-likes','includeLikes'],['setting-recent','includeRecent'],['setting-avoid','avoidKnownArtists'],['setting-audio','deepAudio'],['setting-floating','floating'],['setting-background','background'],['setting-startup','startup'],['setting-update','autoUpdate']])settings[key]=$(id).checked;
+ settings.audioBatch=Number($('setting-batch').value);settings.repeatDays=Number($('setting-repeat').value);settings.artistLimit=Number($('setting-artist-limit').value);settings.albumLimit=Number($('setting-album-limit').value);settings.weights=Object.fromEntries(Object.keys(WEIGHT_FIELDS).map(k=>[k,Number($('weight-'+k).value)]));
  state=await request('settings',settings);settingsDirty=false;render();toast('设置已保存');
 }
 async function generate(){
@@ -95,6 +111,8 @@ async function startQr(){
  }finally{$('qr-start').disabled=false;}
 }
 document.querySelectorAll('.nav').forEach(b=>{b.onclick=()=>page(b.dataset.page);});
+createWeightControls();$('statistics-scope').onchange=renderStatistics;$('export-statistics').onclick=()=>run(()=>request('exportStatistics'));
+for(const [id,overrides] of [['weights-balanced',{}],['weights-sound',{instruments:36,rhythm:18,timbre:16,harmony:10,dynamics:8,vocal:10,relation:8,style:8,mood:2,theme:2}],['weights-lyrics',{mood:24,theme:24,language:12,style:20,instruments:10,rhythm:4}]])$(id).onclick=()=>{for(const [key,[name,value]] of Object.entries(WEIGHT_FIELDS)){const input=$('weight-'+key);input.value=overrides[key]??value;input.previousElementSibling.textContent=input.value;}settingsDirty=true;};
 $('generate').onclick=()=>run(generate);$('start-analysis').onclick=()=>run(async()=>{if(settingsDirty||!state.settings.sourceConfirmed)await saveSettings();await generate();});
 $('welcome-connect').onclick=()=>run(async()=>{if(state.connected&&state.settings.sourceConfirmed&&!settingsDirty)return generate();page('settings');if(!state.connected)await startQr();else if(!state.playlists.length)await loadPlaylists();});
 $('play-all').onclick=()=>run(async()=>{const h=state.history.find(h=>h.date===state.today);if(h?.songs.length)await request('playerPlay',{id:h.songs[0].id,date:h.date});});
@@ -118,6 +136,8 @@ window.music.onProgress(text=>{$('progress-text').textContent=text;if(!localBusy
 window.__previewFixture=()=>{
  state.connected=true;state.profile={id:42,name:'音乐爱好者'};state.settings.sourceConfirmed=true;state.settings.favoritePlaylist=99;state.favorites={99:[2]};
  state.history=[{date:state.today,createdAt:new Date().toISOString(),songs:[{id:1,name:'河岸的晚风',artists:[{id:11,name:'示例音乐人 A'}],album:'慢慢走',reasons:['可听到相近的原声吉他音色']},{id:2,name:'不眠城市',artists:[{id:12,name:'示例音乐人 B'}],album:'夜色',reasons:['节奏速度接近']},{id:3,name:'雨停之前',artists:[{id:13,name:'示例音乐人 C'}],album:'沿途',exploration:true,reasons:['与喜欢的歌曲风格接近']},{id:4,name:'春日来信',artists:[{id:14,name:'示例音乐人 D'}],album:'远方',reasons:['可听到相近的钢琴音色']}]}];
+ state.analysis={metadata:120,audio:84,lyrics:98,pending:36};document.querySelector('#page-taste .page-title p').textContent='界面预览 · 虚构示例数据';
+ state.musicStatistics={current:{total:120,audio:84,lyrics:98,groups:{instruments:{title:'乐器',total:120,known:72,unknown:48,multiple:true,rows:[{name:'原声吉他',count:41,percent:56.9},{name:'钢琴',count:32,percent:44.4},{name:'弦乐',count:18,percent:25}]},tempo:{title:'节奏速度',total:120,known:80,unknown:40,rows:[{name:'适中 · 90–129 BPM',count:48,percent:60},{name:'舒缓 · 90 BPM 以下',count:24,percent:30},{name:'明快 · 130 BPM 以上',count:8,percent:10}]},language:{title:'歌词语言',total:120,known:98,unknown:22,rows:[{name:'中文',count:54,percent:55.1},{name:'英语',count:29,percent:29.6},{name:'日语',count:15,percent:15.3}]},mood:{title:'歌词情绪',total:120,known:58,unknown:62,multiple:true,rows:[{name:'温暖',count:32,percent:55.2},{name:'思念',count:22,percent:37.9}]}}},runs:[]};state.musicStatistics.archive=state.musicStatistics.current;
  state.player={song:state.history[0].songs[0],queue:state.history[0].songs,index:0,paused:false,loading:false,time:43,duration:226,volume:.8,mode:'sequence',error:'',trial:false};render();$('hero-meta').textContent='界面预览 · 虚构示例数据';page('today');
 };
 window.__smokeTest=async()=>{
@@ -125,12 +145,14 @@ window.__smokeTest=async()=>{
  check('首次启动要求设置来源',!state.settings.sourceConfirmed&&!$('welcome').classList.contains('hidden'));check('没有设计说明文字',!document.body.textContent.includes('歌手关联的加分'));
  const before=await request('state');const result=await window.music.request('generate');check('未确认来源不进行分析',!result.ok&&before.history.length===state.history.length);
  page('settings');check('歌单与收藏目标均需明确选择',$('favorite-playlist').value===''&&$('playlist-list').querySelectorAll('input:checked').length===0);
+ check('分析按钮位于待分析歌单区',$('start-analysis').closest('.panel').querySelector('#playlist-list')!==null);check('推荐参数可独立调节',Object.keys(WEIGHT_FIELDS).every(k=>!!$('weight-'+k)));
  check('播放器控件齐全',['player-toggle','player-next','player-heart','player-seek','player-duration','player-mode'].every(id=>!!$(id)));
  const invalid=await window.music.request('playerCommand',{type:'seek',value:-1});check('拒绝无效进度',!invalid.ok);
  const arbitrary=await window.music.request('arbitrary');check('拒绝未知调用',!arbitrary.ok);
  const hostile={id:999,name:'<img src=x onerror=alert(1)>',artists:[],reasons:['<script>alert(1)</script>']};songList($('history-songs'),[hostile],state.today);check('外部歌曲文字安全显示',$('history-songs').textContent.includes(hostile.name)&&!$('history-songs').querySelector('img,script'));
  window.__previewFixture();check('推荐行显示播放与爱心',$('today-songs').querySelectorAll('.play-row').length===4&&$('today-songs').querySelectorAll('.heart').length===4);
  check('播放器时间正确',$('player-elapsed').textContent==='0:43'&&$('player-duration').textContent==='3:46');
+ page('taste');check('偏好统计实际渲染分布',$('statistics-grid').querySelectorAll('.stat-row').length>0);check('统计可切换历次记录',!!$('statistics-scope').querySelector('[value=archive]'));
  await refresh();page('today');return {ok:checks.every(c=>c.pass),checks};
 };
 run(refresh);

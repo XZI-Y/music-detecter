@@ -6,15 +6,18 @@ const { Store } = require('./store');
 const { Connector } = require('./connector');
 const { recommend, taste, dateKey } = require('./engine');
 const {AudioAnalysis}=require('./analysis');
+const {statistics,recordAnalysis,archiveSongs}=require('./statistics');
+const {clampBounds,dockBounds,bubbleBounds,expandBounds}=require('./floating-layout');
 const {PlayerController}=require('./player-controller');
 const {configureUpdates}=require('./updater');
 const originalLog = console.log;
 console.log = (...args) => { if (args[0] === '[ERR]') originalLog('[网易云接口暂不可用]'); else originalLog(...args); };
-app.setName('听见新喜欢');
+app.setName('雷达');
+app.setPath('userData',path.join(app.getPath('appData'),'听见新喜欢'));
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('autoplay-policy','no-user-gesture-required');
 let win, playerWindow, decodeWindow, bubble, player, audioAnalysis, updates, store, connector, mediaConnector, cookie = '', busy = false, quitting = false, tray, qrKey = '', qrBusy = false, qrGeneration = 0, candidateCache = [], nextAttempt = 0;
-let decodeSequence=0,backgroundAnalysisAt=0;const decodePending=new Map(),favoritePending=new Set();
+let decodeSequence=0,backgroundAnalysisAt=0,floatingExpanded=false,floatingDrag=null;const decodePending=new Map(),favoritePending=new Set();
 const smoke = process.argv.includes('--smoke-test');
 if (smoke) {
   app.commandLine.appendSwitch('in-process-gpu');
@@ -28,7 +31,7 @@ function uiWindows(){return [win,bubble].filter(w=>w&&!w.isDestroyed());}
 function changed() { for(const w of uiWindows())w.webContents.send('music:changed'); }
 function snapshot() {
   const d = store.data;
-  return { ...d, library: undefined, likedIds: undefined, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
+  return { ...d, library: undefined, likedIds: undefined, analysisArchive:undefined, musicStatistics:statistics(d), floating:{mode:d.settings.floatingMode||"dock",expanded:!!floatingExpanded}, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
 }
 function saveCookie(value) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows 安全存储暂不可用，无法安全保存登录。请稍后重试。');
@@ -60,11 +63,12 @@ async function generate(force = false) {
     const draft = structuredClone(store.data);
     const synced = await connector.sync(draft);
     Object.assign(draft, synced);
+    archiveSongs(store.data,draft.library);store.save();draft.analysisArchive=store.data.analysisArchive;
     const { candidates, warnings } = await connector.candidates(draft);
-    draft.library=draft.library.map(s=>audioAnalysis.attach(s));
+    draft.library=draft.library.map(s=>audioAnalysis.attach(s));archiveSongs(store.data,draft.library);store.save();
     let enrichedCandidates=candidates.map(s=>audioAnalysis.attach(s));
     if(draft.settings.deepAudio){
-      const seedBatch=await audioAnalysis.batch(draft.library,Math.max(4,Math.floor(draft.settings.audioBatch/3)));
+      const seedBatch=await audioAnalysis.batch(draft.library.map(s=>({...s,analysisRole:'source'})),Math.max(4,Math.floor(draft.settings.audioBatch/3)));
       draft.library=seedBatch.songs;
       const candidateBatch=await audioAnalysis.batch(enrichedCandidates,draft.settings.audioBatch-Math.max(4,Math.floor(draft.settings.audioBatch/3)));
       enrichedCandidates=candidateBatch.songs;
@@ -83,7 +87,7 @@ async function generate(force = false) {
     if (!finalSongs.length) throw new Error('候选已被筛选排除，请调整来源后重试。');
     draft.history = [{ date, createdAt: new Date().toISOString(), exploration:draft.settings.exploration,songs: finalSongs }, ...draft.history.filter(h => h.date !== date)].slice(0, 90);
     draft.warnings = [...new Set(warnings)];
-    draft.analysis=analysisCounts(draft.library);
+    draft.analysis=analysisCounts(draft.library);recordAnalysis(draft);
     store.data = draft; store.save(); candidateCache = enrichedCandidates;
     progress('今日歌单已更新');
     return snapshot();
@@ -95,10 +99,10 @@ async function analyzeMore(){
   busy=true;connector.cancelled=false;changed();
   try{
     const songs=[];
-    for(const song of store.data.library){if(connector.cancelled)throw new Error('操作已取消');songs.push(await connector.enrich(song));}
-    const result=await audioAnalysis.batch(songs,store.data.settings.audioBatch);
-    store.data.library=result.songs;store.data.analysis=analysisCounts(result.songs);store.save();progress(`已识别 ${store.data.analysis.audio} 首歌曲的音频特征`);return snapshot();
-  }finally{busy=false;changed();}
+    let lyricBudget=store.data.settings.audioBatch;for(const song of store.data.library){if(connector.cancelled)throw new Error('操作已取消');if(!song.features?.lyricAnalyzed&&lyricBudget>0){const enriched=await connector.enrich(song);archiveSongs(store.data,[enriched]);songs.push(enriched);lyricBudget--;}else songs.push(song);}
+    const result=await audioAnalysis.batch(songs.map(s=>({...s,analysisRole:'source'})),store.data.settings.audioBatch);
+    store.data.library=result.songs;store.data.analysis=analysisCounts(result.songs);recordAnalysis(store.data);store.save();progress(`已识别 ${store.data.analysis.audio} 首歌曲的音频特征`);return snapshot();
+  }finally{store.save();busy=false;changed();}
 }
 function helperWindow(file,preload){
   const w=new BrowserWindow({show:false,width:640,height:480,webPreferences:{preload:path.join(__dirname,preload),contextIsolation:true,sandbox:true,nodeIntegration:false,backgroundThrottling:false}});
@@ -115,11 +119,16 @@ async function fetchAudio(url){
 function setupBubble(){
   if(!store.data.settings.floating){bubble?.destroy();bubble=null;return;}
   if(bubble&&!bubble.isDestroyed())return;
-  const area=screen.getPrimaryDisplay().workArea;
-  bubble=new BrowserWindow({x:area.x+area.width-92,y:area.y+area.height-95,width:64,height:64,frame:false,transparent:true,resizable:false,alwaysOnTop:true,skipTaskbar:true,hasShadow:false,webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  const mode=store.data.settings.floatingMode||'dock',position=store.data.settings.floatingPosition;
+  const area=position?screen.getDisplayNearestPoint(position).workArea:screen.getPrimaryDisplay().workArea;
+  const bounds=mode==='dock'?dockBounds(area):bubbleBounds(position?.x||area.x+area.width-50,position?.y||area.y+area.height-50,area);
+  floatingExpanded=false;
+  bubble=new BrowserWindow({...bounds,frame:false,transparent:true,resizable:false,alwaysOnTop:true,skipTaskbar:true,hasShadow:false,webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
   bubble.setAlwaysOnTop(true,'floating');bubble.webContents.setWindowOpenHandler(()=>({action:'deny'}));bubble.webContents.on('will-navigate',e=>e.preventDefault());bubble.loadFile(path.join(__dirname,'floating.html'));
-  bubble.on('closed',()=>{bubble=null;});
+  bubble.webContents.once('did-finish-load',notifyFloating);
+  bubble.on('closed',()=>{bubble=null;floatingDrag=null;});
 }
+function notifyFloating(){if(bubble&&!bubble.isDestroyed())bubble.webContents.send('music:floating',{mode:store.data.settings.floatingMode||'dock',expanded:floatingExpanded});}
 async function loadPlaylists(){
   if(!cookie)throw new Error('请先连接账号');connector.cancelled=false;
   store.data.playlists=await connector.playlists((await connector.account()).id);
@@ -149,8 +158,8 @@ function setupTray() {
   if (tray) { tray.destroy(); tray = null; }
   if (!store.data.settings.background&&!store.data.settings.floating) return;
   const icon = nativeImage.createFromPath(path.join(__dirname, 'icon.png'));
-  tray = new Tray(icon); tray.setToolTip('听见新喜欢');
-  tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开听见新喜欢', click: () => { win.show(); win.focus(); } }, { label: '退出', click: () => { quitting = true; app.quit(); } }]));
+  tray = new Tray(icon); tray.setToolTip('雷达');
+  tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开雷达', click: () => { win.show(); win.focus(); } }, { label: '退出', click: () => { quitting = true; app.quit(); } }]));
   tray.on('double-click', () => { win.show(); win.focus(); });
 }
 async function automatic() {
@@ -164,11 +173,11 @@ async function automatic() {
   nextAttempt = Date.now() + 3600000;
   try {
     await generate();
-    if (!win.isVisible() && Notification.isSupported()) new Notification({ title: '听见新喜欢', body: '今天的推荐歌单已准备好', icon: path.join(__dirname, 'icon.png') }).show();
+    if (!win.isVisible() && Notification.isSupported()) new Notification({ title: '雷达', body: '今天的推荐歌单已准备好', icon: path.join(__dirname, 'icon.png') }).show();
   } catch (e) { progress(e.message); }
 }
 function createWindow() {
-  win = new BrowserWindow({ width: 1180, height: 830, minWidth: 930, minHeight: 680, title: '听见新喜欢', backgroundColor: '#101716', icon: path.join(__dirname, 'icon.png'), autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+  win = new BrowserWindow({ width: 1180, height: 830, minWidth: 930, minHeight: 680, title: '雷达', backgroundColor: '#101716', icon: path.join(__dirname, 'icon.png'), autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   win.on('close', event => { if (!quitting && (store.data.settings.background||store.data.settings.floating) && tray) { event.preventDefault(); win.hide(); } });
@@ -190,12 +199,23 @@ function createWindow() {
       await win.webContents.executeJavaScript('window.__previewFixture(); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
         const preview = await win.webContents.capturePage();
         fs.writeFileSync(path.join(app.getPath('userData'), 'preview.png'), preview.toPNG());
+        await win.webContents.executeJavaScript('page("taste"); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        fs.writeFileSync(path.join(app.getPath('userData'),'statistics.png'),(await win.webContents.capturePage()).toPNG());
+        await win.webContents.executeJavaScript('page("settings"); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        fs.writeFileSync(path.join(app.getPath('userData'),'settings.png'),(await win.webContents.capturePage()).toPNG());
         const fixture=await win.webContents.executeJavaScript('JSON.parse(JSON.stringify(state))');
         store.data.settings.floating=true;setupBubble();
         await new Promise(resolve=>bubble.webContents.once('did-finish-load',resolve));
-        bubble.setBounds({x:100,y:100,width:420,height:345});
+        const area=screen.getPrimaryDisplay().workArea;
+        const interactive=await bubble.webContents.executeJavaScript(`(async()=>{const before=(await window.music.request('state')).data.player.mode;document.getElementById('mode').click();await new Promise(r=>requestAnimationFrame(r));const after=(await window.music.request('state')).data.player.mode;await window.music.request('floatingDrag',{phase:'start',x:${area.x+400},y:${area.y+5}});await window.music.request('floatingDrag',{phase:'end',x:${area.x+400},y:${area.y+300}});await window.music.request('bubbleExpand',{expanded:true});const s=(await window.music.request('state')).data;return {controls:before!==after,bubble:s.floating.mode==='bubble'&&s.floating.expanded,region:getComputedStyle(document.getElementById('bubble')).getPropertyValue('-webkit-app-region')};})()`);
+        if(!interactive.controls||!interactive.bubble||interactive.region!=='no-drag')throw new Error('悬浮播放器交互验证失败');
+        fs.writeFileSync(path.join(app.getPath('userData'),'floating-test.json'),JSON.stringify(interactive));
+        fixture.floating={mode:'bubble',expanded:true};bubble.setBounds({x:100,y:100,width:420,height:345});
         await bubble.webContents.executeJavaScript('window.__previewFixture('+JSON.stringify(fixture)+'); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         fs.writeFileSync(path.join(app.getPath('userData'),'bubble.png'),(await bubble.webContents.capturePage()).toPNG());
+        await bubble.webContents.executeJavaScript('window.music.request("floatingDock")');
+        fixture.floating={mode:'dock',expanded:false};await bubble.webContents.executeJavaScript('window.__previewFixture('+JSON.stringify(fixture)+'); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        fs.writeFileSync(path.join(app.getPath('userData'),'dock.png'),(await bubble.webContents.capturePage()).toPNG());
         if(process.argv.includes('--model-smoke')){
           const rate=16000,samples=rate*10,bytes=Buffer.alloc(44+samples*2);
           bytes.write('RIFF');bytes.writeUInt32LE(bytes.length-8,4);bytes.write('WAVE',8);bytes.write('fmt ',12);bytes.writeUInt32LE(16,16);bytes.writeUInt16LE(1,20);bytes.writeUInt16LE(1,22);bytes.writeUInt32LE(rate,24);bytes.writeUInt32LE(rate*2,28);bytes.writeUInt16LE(2,32);bytes.writeUInt16LE(16,34);bytes.write('data',36);bytes.writeUInt32LE(samples*2,40);
@@ -225,14 +245,14 @@ else {
   app.on('second-instance', () => { if (win) { win.show(); win.focus(); } });
   app.whenReady().then(() => {
     store = new Store(app.getPath('userData'));
-    readCookie(); connector = new Connector(() => cookie, progress);
+    readCookie();archiveSongs(store.data,store.data.library);store.save(); connector = new Connector(() => cookie, progress);
     mediaConnector=new Connector(()=>cookie,()=>{});
     try{connector.cache=new Map(Object.entries(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),'utf8'))).map(([id,value])=>[Number(id),value]));}catch{}
     const originalEnrich=connector.enrich.bind(connector);let cacheSavedAt=0;
     connector.enrich=async song=>{const enriched=await originalEnrich(song);if(Date.now()-cacheSavedAt>30000){fs.writeFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),JSON.stringify(Object.fromEntries(connector.cache)));cacheSavedAt=Date.now();}return enriched;};
     const audioHelper=helperWindow('player.html','player-preload.js');playerWindow=audioHelper.window;
     const decoderHelper=helperWindow('decode.html','decode-preload.js');decodeWindow=decoderHelper.window;
-    audioAnalysis=new AudioAnalysis({dataPath:app.getPath('userData'),modelPath:app.isPackaged?path.join(process.resourcesPath,'models','ast'):path.join(__dirname,'..','models','ast'),connector,progress,fetchAudio,decode:async bytes=>{
+    audioAnalysis=new AudioAnalysis({dataPath:app.getPath('userData'),modelPath:app.isPackaged?path.join(process.resourcesPath,'models','ast'):path.join(__dirname,'..','models','ast'),connector,progress,fetchAudio,onAnalyzed:song=>{if(song.analysisRole==='source'){archiveSongs(store.data,[song]);store.save();}},decode:async bytes=>{
       await decoderHelper.ready;const id=++decodeSequence;
       return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{decodePending.delete(id);reject(new Error('音频解码超时'));},20000);decodePending.set(id,{resolve,reject,timer});decodeWindow.webContents.send('audio:decode',{id,bytes});});
     }});
@@ -290,9 +310,12 @@ else {
             const target=p.favoritePlaylist? id(p.favoritePlaylist):null;
             if(target&&!store.data.playlists.some(y=>y.id===target&&y.ownerId===store.data.profile?.id))throw new Error('收藏目标需要是你自己的歌单');
             if(p.confirmSources&&(!selected.length||!target))throw new Error('请选择分析歌单和收藏目标');
+            const audioBatch=Number(p.audioBatch??store.data.settings.audioBatch),repeatDays=Number(p.repeatDays??store.data.settings.repeatDays),artistLimit=Number(p.artistLimit??store.data.settings.artistLimit),albumLimit=Number(p.albumLimit??store.data.settings.albumLimit);
+            if(![12,24,48,72].includes(audioBatch)||![7,14,30,60].includes(repeatDays)||![1,2,3].includes(artistLimit)||![1,2,3].includes(albumLimit))throw new Error('分析与去重设置无效');
+            const weights=p.weights||store.data.settings.weights||{};const allowedWeights=Object.keys(require('./engine').WEIGHTS).filter(k=>k!=='artist');if(Object.entries(weights).some(([k,v])=>!allowedWeights.includes(k)||!Number.isFinite(v)||v<0||v>100)||Object.keys(weights).length&&allowedWeights.every(k=>(weights[k]??require('./engine').WEIGHTS[k]*100)===0))throw new Error('请至少保留一项推荐依据');
             const sourcesChanged=JSON.stringify(selected)!==JSON.stringify(store.data.settings.selected)||!!p.includeLikes!==store.data.settings.includeLikes||!!p.includeRecent!==store.data.settings.includeRecent;
             if(sourcesChanged)store.data.settings.analysisStarted=false;
-            store.data.settings = {...store.data.settings,count, exploration, syncHour, selected, favoritePlaylist:target,sourceConfirmed:p.confirmSources?true:store.data.settings.sourceConfirmed,includeLikes:!!p.includeLikes,includeRecent:!!p.includeRecent,avoidKnownArtists:p.avoidKnownArtists!==false,floating:!!p.floating,deepAudio:p.deepAudio!==false,autoUpdate:p.autoUpdate!==false,background: !!p.background, startup: !!p.startup };
+            store.data.settings = {...store.data.settings,count, exploration, syncHour, selected, favoritePlaylist:target,sourceConfirmed:p.confirmSources?true:store.data.settings.sourceConfirmed,includeLikes:!!p.includeLikes,includeRecent:!!p.includeRecent,avoidKnownArtists:p.avoidKnownArtists!==false,floating:!!p.floating,deepAudio:p.deepAudio!==false,autoUpdate:p.autoUpdate!==false,audioBatch,repeatDays,artistLimit,albumLimit,weights,background: !!p.background, startup: !!p.startup };
             if(!smoke)app.setLoginItemSettings({ openAtLogin: !!p.startup }); store.save(); setupTray();setupBubble(); value = snapshot(); break;
           }
           case 'favorite': value=await favoriteSong(id(payload?.id),payload?.add);break;
@@ -304,8 +327,20 @@ else {
           case 'openWindow':win.show();win.focus();value=true;break;
           case 'bubbleExpand': {
             if(event.sender!==bubble?.webContents)throw new Error('操作来源无效');
-            const bounds=bubble.getBounds(),area=screen.getDisplayMatching(bounds).workArea;const width=payload?.expanded?420:64,height=payload?.expanded?345:64;
-            bubble.setBounds({x:Math.max(area.x,Math.min(bounds.x+bounds.width-width,area.x+area.width-width)),y:Math.max(area.y,Math.min(bounds.y+bounds.height-height,area.y+area.height-height)),width,height});value=true;break;
+            if(store.data.settings.floatingMode!=='dock'){const bounds=bubble.getBounds();floatingExpanded=!!payload?.expanded;bubble.setBounds(expandBounds(bounds,floatingExpanded,screen.getDisplayMatching(bounds).workArea));notifyFloating();}value=true;break;
+          }
+          case 'floatingDrag': {
+            if(event.sender!==bubble?.webContents)throw new Error('操作来源无效');
+            const x=Number(payload?.x),y=Number(payload?.y);if(!Number.isFinite(x)||!Number.isFinite(y)||Math.abs(x)>100000||Math.abs(y)>100000)throw new Error('拖动位置无效');
+            if(payload.phase==='start')floatingDrag={x,y,bounds:bubble.getBounds()};
+            else if(payload.phase==='move'&&floatingDrag){const b=floatingDrag.bounds;bubble.setBounds({...b,x:Math.round(b.x+x-floatingDrag.x),y:Math.round(b.y+y-floatingDrag.y)});}
+            else if(payload.phase==='end'&&floatingDrag){const area=screen.getDisplayNearestPoint({x:Math.round(x),y:Math.round(y)}).workArea;store.data.settings.floatingMode=y<=area.y+22?'dock':'bubble';floatingExpanded=false;const b=store.data.settings.floatingMode==='dock'?dockBounds(area):bubbleBounds(x,y,area);bubble.setBounds(b);store.data.settings.floatingPosition={x:b.x+b.width/2,y:b.y+b.height/2};floatingDrag=null;store.save();notifyFloating();}value=true;break;
+          }
+          case 'floatingDock': {
+            const area=screen.getDisplayMatching(bubble?.getBounds()||win.getBounds()).workArea;store.data.settings.floatingMode='dock';floatingExpanded=false;bubble?.setBounds(dockBounds(area));store.save();notifyFloating();value=true;break;
+          }
+          case 'exportStatistics': {
+            const target=await dialog.showSaveDialog(win,{title:'导出音乐偏好统计',defaultPath:'雷达-音乐偏好统计.json',filters:[{name:'统计数据',extensions:['json']}]});if(!target.canceled)fs.writeFileSync(target.filePath,JSON.stringify(statistics(store.data),null,2));value=!target.canceled;break;
           }
           case 'checkUpdate':value=await updates.check();break;
           case 'downloadUpdate':value=await updates.download();break;

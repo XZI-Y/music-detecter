@@ -16,7 +16,7 @@ class AudioAnalysis {
     const bytes=await this.options.fetchAudio(media.url);
     const clips=await this.options.decode(bytes);
     const audio=await this.classify(clips);
-    audio.trial=media.trial;this.cache[song.id]=audio;this.save();return this.attach(song);
+    audio.trial=media.trial;this.cache[song.id]=audio;this.save();const enriched=this.attach(song);this.options.onAnalyzed?.(enriched);return enriched;
   }
   async batch(songs,limit=24){
     const result=songs.map(s=>this.attach(s));let completed=0,failed=0;

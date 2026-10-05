@@ -1,7 +1,7 @@
 {
   "name": "music-compass",
-  "productName": "听见新喜欢",
-  "version": "1.1.0",
+  "productName": "雷达",
+  "version": "1.2.0",
   "description": "本地优先的网易云音乐发现助手",
   "author": "Music Compass",
   "license": "MIT",
@@ -13,7 +13,7 @@
   },
   "build": {
     "appId": "local.musiccompass.desktop",
-    "productName": "听见新喜欢",
+    "productName": "雷达",
     "directories": {
       "output": "dist"
     },
@@ -38,7 +38,7 @@
       "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "听见新喜欢",
+      "shortcutName": "雷达",
       "deleteAppDataOnUninstall": false
     },
     "publish": [
