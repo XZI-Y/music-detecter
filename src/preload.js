@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('music', {
   ,onFloating: callback => { ipcRenderer.on('music:floating', (_, value) => callback(value)); }
   ,onLyrics: callback => { ipcRenderer.on('music:lyrics', (_, value) => callback(value)); }
   ,onAppearance: callback => { ipcRenderer.on('music:appearance', (_, value) => callback(value)); }
+  ,onNavigate: callback => { ipcRenderer.on('music:navigate', (_, value) => callback(value)); }
   ,onAssistant: callback => { ipcRenderer.on('music:assistant', (_, value) => callback(value)); }
   ,onUpdate: callback => { ipcRenderer.on('music:update', (_, value) => callback(value)); }
 });

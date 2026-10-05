@@ -226,3 +226,5 @@ window.__smokeTest=async()=>{
  await refresh();page('today');return {ok:checks.every(c=>c.pass),checks};
 };
 run(refresh);
+
+window.music.onNavigate(name=>{if(name==='assistant')page(name);});

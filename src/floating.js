@@ -19,6 +19,7 @@ for(const [id,type] of [['toggle','toggle'],['previous','previous'],['next','nex
 $('mode').onclick=()=>request('playerCommand',{type:'mode',value:player?.mode==='shuffle'?'sequence':'shuffle'}).catch(()=>{});
 $('heart').onclick=async()=>{if(!player?.song)return;$('heart').disabled=true;try{await request('favorite',{id:player.song.id,add:!state?.favorites?.[state.settings.favoritePlaylist]?.includes(player.song.id)});await refresh();}catch{}finally{$('heart').disabled=false;}};
 $('seek').onpointerdown=()=>{seeking=true;clearTimeout(collapseTimer);};$('seek').onchange=()=>{request('playerCommand',{type:'seek',value:Number($('seek').value)}).catch(()=>{});seeking=false;};$('seek').onpointerup=()=>{seeking=false;};
+$('assistant').onclick=()=>request('openWindow',{page:'assistant'}).catch(()=>{});
 $('open').onclick=()=>request('openWindow').catch(()=>{});$('dock').onclick=()=>request('floatingDock').catch(()=>{});
 function renderLyric(){const same=lyrics.songId===player?.song?.id,index=same?LyricFormat.current(lyrics.lines||[],player.time): -1;const line=same&&index>=0?lyrics.lines[index].text:same&&lyrics.status==='plain'?lyrics.plain.split('\n')[0]:same?lyrics.message:player?.song?'正在加载歌词…':'播放后显示歌词';$('lyric').textContent=line||'前奏…';$('lyric').title=line||'';}
 window.music.onLyrics(value=>{lyrics=value;renderLyric();});window.music.onAppearance(value=>RadarAppearance.apply(value));

@@ -53,3 +53,9 @@ body{color:var(--text)}body:not(.floating-root){background:var(--bg)}body:not(.f
 :root:is([data-material=aurora],[data-material=ceramic],[data-material=velvet],[data-material=retro]) .sidebar,:root:is([data-material=aurora],[data-material=ceramic],[data-material=velvet],[data-material=retro]) .playerbar{background:var(--material-surface);box-shadow:var(--material-shadow)}
 :root:is([data-material=aurora],[data-material=ceramic],[data-material=velvet],[data-material=retro]) .floating-root .bubble{background:var(--material-surface);color:var(--accent);box-shadow:var(--material-shadow);border-color:var(--material-border)}
 :root[data-material=retro] .floating-root .bubble{border-style:double;border-width:3px}
+
+/* Consistent spacing and quieter control edges. */
+.nav{border-radius:12px}.nav:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.nav.active{background:color-mix(in srgb,var(--accent) 15%,var(--panel))}
+.song{border-radius:12px;padding-left:10px;padding-right:10px}.song:hover{background:color-mix(in srgb,var(--accent) 4%,transparent)}
+.primary,.quiet,.danger{border-radius:10px}.panel h2{line-height:1.5}.page-title p{max-width:650px}

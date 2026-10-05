@@ -260,12 +260,24 @@ function createWindow() {
         const area=screen.getPrimaryDisplay().workArea;
         const interactive=await bubble.webContents.executeJavaScript(`(async()=>{const before=(await window.music.request('state')).data.player.mode;document.getElementById('mode').click();await new Promise(r=>requestAnimationFrame(r));const after=(await window.music.request('state')).data.player.mode;await window.music.request('floatingDrag',{phase:'start',x:${area.x+400},y:${area.y+5}});await window.music.request('floatingDrag',{phase:'end',x:${area.x+400},y:${area.y+300}});await window.music.request('bubbleExpand',{expanded:true});const s=(await window.music.request('state')).data;return {controls:before!==after,bubble:s.floating.mode==='bubble'&&s.floating.expanded,region:getComputedStyle(document.getElementById('bubble')).getPropertyValue('-webkit-app-region')};})()`);
         if(!interactive.controls||!interactive.bubble||interactive.region!=='no-drag')throw new Error('悬浮播放器交互验证失败');
+        await bubble.webContents.executeJavaScript('document.getElementById("assistant").click()');
+        await new Promise(resolve=>setTimeout(resolve,150));
+        const assistantEntry=await win.webContents.executeJavaScript('!document.getElementById("page-assistant").classList.contains("hidden")');
+        if(!assistantEntry)throw new Error('气泡音乐助手入口验证失败');
+        interactive.assistant=assistantEntry;
         fs.writeFileSync(path.join(app.getPath('userData'),'floating-test.json'),JSON.stringify(interactive));
         fixture.floating={mode:'bubble',expanded:true};bubble.setBounds({x:100,y:100,width:420,height:370});
         await bubble.webContents.executeJavaScript('window.__previewFixture('+JSON.stringify(fixture)+'); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         fs.writeFileSync(path.join(app.getPath('userData'),'bubble.png'),(await bubble.webContents.capturePage()).toPNG());
         await bubble.webContents.executeJavaScript('window.music.request("floatingDock")');
         fixture.floating={mode:'dock',expanded:false};await bubble.webContents.executeJavaScript('window.__previewFixture('+JSON.stringify(fixture)+'); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        await win.webContents.executeJavaScript('page("today")');
+        await bubble.webContents.executeJavaScript('document.getElementById("assistant").click()');
+        await new Promise(resolve=>setTimeout(resolve,150));
+        const dockAssistant=await win.webContents.executeJavaScript('!document.getElementById("page-assistant").classList.contains("hidden")');
+        const corners=await bubble.webContents.executeJavaScript('getComputedStyle(document.getElementById("panel")).borderTopLeftRadius');
+        if(!dockAssistant||corners!=='24px')throw new Error('顶部栏助手与圆角验证失败');
+        fs.writeFileSync(path.join(app.getPath('userData'),'dock-test.json'),JSON.stringify({assistant:dockAssistant,corners}));
         fs.writeFileSync(path.join(app.getPath('userData'),'dock.png'),(await bubble.webContents.capturePage()).toPNG());
         if(process.argv.includes('--model-smoke')){
           const rate=16000,samples=rate*10,bytes=Buffer.alloc(44+samples*2);
@@ -392,7 +404,7 @@ else {
             if(!history)throw new Error('播放列表不存在');await player.play(history.songs,songId);value=player.snapshot();break;
           }
           case 'playerCommand': await recommendationSettings.playerCommand(player,store.data,payload?.type,payload?.value);value=player.snapshot();break;
-          case 'openWindow':win.show();win.focus();value=true;break;
+          case 'openWindow':win.show();win.focus();if(payload?.page==='assistant')win.webContents.send('music:navigate','assistant');value=true;break;
           case 'bubbleExpand': {
             if(event.sender!==bubble?.webContents)throw new Error('操作来源无效');
             if(store.data.settings.floatingMode!=='dock'){const bounds=bubble.getBounds();floatingExpanded=!!payload?.expanded;bubble.setBounds(expandBounds(bounds,floatingExpanded,screen.getDisplayMatching(bounds).workArea));notifyFloating();}value=true;break;

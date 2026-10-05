@@ -1,0 +1,10 @@
+/* Floating corners remain rounded across all material choices. */
+:root .floating-root .panel{border-radius:24px;inset:5px 6px 66px;overflow:hidden;background-clip:padding-box;box-shadow:0 3px 10px #0003,inset 0 1px 0 #ffffff16}
+:root .floating-root.docked .panel{inset:5px 6px;padding:9px 13px;grid-template-columns:54px minmax(120px,1fr) 186px 38px 22px;grid-template-rows:34px 18px 15px 12px;gap:3px 8px;border-radius:24px}
+.docked #assistant{grid-column:4;grid-row:1}.docked #open{grid-column:5;grid-row:1}
+.floating-root #assistant{font-size:11px;font-weight:600;white-space:nowrap;border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:10px;padding:6px 7px}
+.floating-root button{transition:background .15s,transform .15s;border-radius:9px}.floating-root button:hover{background:color-mix(in srgb,var(--accent) 14%,transparent)}.floating-root button:active{transform:scale(.94)}
+.floating-root .play{border-radius:50%}.floating-root .controls{gap:12px}.floating-root .controls button:not(.play){min-width:25px;min-height:28px}
+.floating-root .track>div:last-child{min-width:0}.floating-root .track strong{line-height:1.45}.floating-root .track small{line-height:1.4}
+.floating-root .heading #dock{margin-left:auto}.floating-root .heading #open{margin-left:0}.floating-root .suggestions button{border:1px solid var(--line);padding:7px 9px;border-radius:10px}
+@media(prefers-reduced-motion:reduce){.floating-root button{transition:none}}
