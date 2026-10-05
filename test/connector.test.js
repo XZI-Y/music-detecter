@@ -39,3 +39,10 @@ test('候选主接口不可用时保留其他来源并给出提示', async () =>
   c.details = async () => [];
   const result = await c.candidates(d); assert.equal(result.candidates[0].id, 2); assert.ok(result.warnings.some(w => w.includes('关联')));
 });
+
+test('候选歌单可从后段读取，不反复只取开头曲目',async()=>{
+ const c=new Connector(()=>'',()=>{}),ids=Array.from({length:300},(_,i)=>i+1);let fetched=[];
+ c.call=async()=>({playlist:{trackCount:300,trackIds:ids.map(id=>({id})),tracks:[],tags:['爵士']}});
+ c.details=async list=>{fetched=list;return list.map(id=>({id,name:'歌曲'+id,artists:[],features:{},tags:[]}));};
+ const result=await c.playlist(1,60,120);assert.deepEqual(fetched,ids.slice(120,180));assert.equal(result.songs[0].id,121);assert.equal(result.songs.length,60);assert.equal(result.total,300);assert.deepEqual(result.songs[0].tags,['爵士']);
+});

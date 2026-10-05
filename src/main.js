@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, safeStorage, Tray, Menu, nativeImage, Notification, dialog, screen, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, Tray, Menu, nativeImage, Notification, dialog, screen, net, powerMonitor } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Store } = require('./store');
@@ -10,6 +10,9 @@ const {statistics,recordAnalysis,archiveSongs}=require('./statistics');
 const {clampBounds,dockBounds,bubbleBounds,expandBounds}=require('./floating-layout');
 const {PlayerController}=require('./player-controller');
 const {configureUpdates}=require('./updater');
+const {dailyStatus,recordSeen}=require('./daily');
+const {validateAvoidance}=require('./music-types');
+const appearance=require('./appearance');
 const originalLog = console.log;
 console.log = (...args) => { if (args[0] === '[ERR]') originalLog('[网易云接口暂不可用]'); else originalLog(...args); };
 app.setName('雷达');
@@ -31,7 +34,7 @@ function uiWindows(){return [win,bubble].filter(w=>w&&!w.isDestroyed());}
 function changed() { for(const w of uiWindows())w.webContents.send('music:changed'); }
 function snapshot() {
   const d = store.data;
-  return { ...d, library: undefined, likedIds: undefined, analysisArchive:undefined, musicStatistics:statistics(d), floating:{mode:d.settings.floatingMode||"dock",expanded:!!floatingExpanded}, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
+  return { ...d, library: undefined, likedIds: undefined, analysisArchive:undefined, seenRecommendations:undefined, daily:dailyStatus(d,!!cookie,busy), musicStatistics:statistics(d), floating:{mode:d.settings.floatingMode||"dock",expanded:!!floatingExpanded}, feedback: Object.fromEntries(Object.entries(d.feedback).map(([k, v]) => [k, { value: v.value }])), connected: !!cookie, libraryCount: d.library.length, likedCount: d.likedIds.length, taste: taste(d.library), busy, today: dateKey(), player:player?.snapshot(),update:updates?.snapshot(),version:app.getVersion() };
 }
 function saveCookie(value) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows 安全存储暂不可用，无法安全保存登录。请稍后重试。');
@@ -57,7 +60,7 @@ async function generate(force = false) {
   if(force){store.data.settings.analysisStarted=true;store.save();}
   const date = dateKey();
   if (!force && store.data.history.some(h => h.date === date)) return snapshot();
-  busy = true; changed();
+  busy = true;store.data.generationNumber=(store.data.generationNumber||0)+1;store.data.dailyUpdate={status:"updating",date,lastAttemptAt:new Date().toISOString()};store.save();changed();
   connector.cancelled = false;
   try {
     const draft = structuredClone(store.data);
@@ -85,13 +88,15 @@ async function generate(force = false) {
     draft.settings = store.data.settings;
     const finalSongs = recommend(enrichedCandidates, draft, date);
     if (!finalSongs.length) throw new Error('候选已被筛选排除，请调整来源后重试。');
+    recordSeen(draft,finalSongs);
+    draft.dailyUpdate={status:'success',date,lastAttemptAt:store.data.dailyUpdate.lastAttemptAt};
     draft.history = [{ date, createdAt: new Date().toISOString(), exploration:draft.settings.exploration,songs: finalSongs }, ...draft.history.filter(h => h.date !== date)].slice(0, 90);
     draft.warnings = [...new Set(warnings)];
     draft.analysis=analysisCounts(draft.library);recordAnalysis(draft);
     store.data = draft; store.save(); candidateCache = enrichedCandidates;
     progress('今日歌单已更新');
     return snapshot();
-  } finally { busy = false; changed(); }
+  } catch(e){store.data.dailyUpdate={status:'error',date,message:e.message,nextRetryAt:new Date(Date.now()+300000).toISOString(),lastAttemptAt:store.data.dailyUpdate.lastAttemptAt};store.save();throw e;} finally { busy = false; changed(); }
 }
 function analysisCounts(library){return {metadata:library.length,lyrics:library.filter(s=>s.features?.language||s.features?.lyricAnalyzed).length,audio:library.filter(s=>s.features?.audio).length,pending:library.filter(s=>!s.features?.audio).length};}
 async function analyzeMore(){
@@ -163,14 +168,14 @@ function setupTray() {
   tray.on('double-click', () => { win.show(); win.focus(); });
 }
 async function automatic() {
-  if (smoke || busy || !cookie || !store.data.settings.sourceConfirmed || !store.data.settings.analysisStarted || Date.now() < nextAttempt) return;
+  if (smoke || busy || !cookie || !store.data.settings.sourceConfirmed || !store.data.settings.analysisStarted || Date.now() < nextAttempt || (store.data.dailyUpdate?.status==='error'&&Date.now()<Date.parse(store.data.dailyUpdate.nextRetryAt))) return;
   const hour = Number(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Shanghai', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
   if (hour < store.data.settings.syncHour) return;
   if(store.data.history.some(h=>h.date===dateKey())){
     if(store.data.settings.deepAudio&&store.data.analysis.pending>0&&Date.now()>backgroundAnalysisAt){backgroundAnalysisAt=Date.now()+600000;try{await analyzeMore();}catch(e){progress(e.message);}}
     return;
   }
-  nextAttempt = Date.now() + 3600000;
+  nextAttempt = Date.now() + 300000;
   try {
     await generate();
     if (!win.isVisible() && Notification.isSupported()) new Notification({ title: '雷达', body: '今天的推荐歌单已准备好', icon: path.join(__dirname, 'icon.png') }).show();
@@ -200,9 +205,19 @@ function createWindow() {
         const preview = await win.webContents.capturePage();
         fs.writeFileSync(path.join(app.getPath('userData'), 'preview.png'), preview.toPNG());
         await win.webContents.executeJavaScript('page("taste"); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        await win.webContents.executeJavaScript('document.querySelector("#statistics-grid .avoid-details").open=true');
+        await new Promise(r=>setTimeout(r,180));
         fs.writeFileSync(path.join(app.getPath('userData'),'statistics.png'),(await win.webContents.capturePage()).toPNG());
         await win.webContents.executeJavaScript('page("settings"); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        await new Promise(r=>setTimeout(r,180));
         fs.writeFileSync(path.join(app.getPath('userData'),'settings.png'),(await win.webContents.capturePage()).toPNG());
+        await win.webContents.executeJavaScript('appearanceDraft={mode:"dark",material:"glass",hue:210,saturation:45};renderAppearance();page("today")');
+        await new Promise(r=>setTimeout(r,180));
+        fs.writeFileSync(path.join(app.getPath('userData'),'glass.png'),(await win.webContents.capturePage()).toPNG());
+        await win.webContents.executeJavaScript('appearanceDraft={mode:"light",material:"flat",hue:35,saturation:45};renderAppearance()');
+        await new Promise(r=>setTimeout(r,180));
+        fs.writeFileSync(path.join(app.getPath('userData'),'light.png'),(await win.webContents.capturePage()).toPNG());
+        await win.webContents.executeJavaScript('appearanceDraft=null;renderAppearance()');
         const fixture=await win.webContents.executeJavaScript('JSON.parse(JSON.stringify(state))');
         store.data.settings.floating=true;setupBubble();
         await new Promise(resolve=>bubble.webContents.once('did-finish-load',resolve));
@@ -245,7 +260,7 @@ else {
   app.on('second-instance', () => { if (win) { win.show(); win.focus(); } });
   app.whenReady().then(() => {
     store = new Store(app.getPath('userData'));
-    readCookie();archiveSongs(store.data,store.data.library);store.save(); connector = new Connector(() => cookie, progress);
+    readCookie();archiveSongs(store.data,store.data.library);for(const h of store.data.history)recordSeen(store.data,h.songs,h.createdAt||h.date+'T12:00:00+08:00');store.save(); connector = new Connector(() => cookie, progress);
     mediaConnector=new Connector(()=>cookie,()=>{});
     try{connector.cache=new Map(Object.entries(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'),'lyric-cache.json'),'utf8'))).map(([id,value])=>[Number(id),value]));}catch{}
     const originalEnrich=connector.enrich.bind(connector);let cacheSavedAt=0;
@@ -298,6 +313,8 @@ else {
           }
           case 'playlists': if (busy) throw new Error('请等待更新完成'); value=await loadPlaylists(); break;
           case 'generate': value = await generate(true); break;
+          case 'appearance': {store.data.settings.appearance=appearance.validate(payload||{});store.save();changed();value=snapshot();break;}
+          case 'avoidance': {if(busy)throw new Error('更新中请稍后保存筛选');Object.assign(store.data.settings,validateAvoidance(payload||{}));store.save();changed();value=snapshot();break;}
           case 'analyzeMore': value=await analyzeMore();break;
           case 'cancel': connector.cancelled=true;value=true;break;
           case 'settings': {
@@ -365,7 +382,7 @@ else {
             if (!candidateCache.length) throw new Error('请先点击“更新今日歌单”获取候选，再替换歌曲');
             const picked = recommend(candidateCache, { ...store.data, settings: { ...store.data.settings, count: 1 } }, dateKey(), today.songs.map(s => s.id), today.songs.filter(s => s.id !== songId));
             if (!picked.length) throw new Error('暂时没有更多符合条件的候选');
-            today.songs = today.songs.map(s => s.id === songId ? picked[0] : s); store.save(); value = snapshot(); break;
+            recordSeen(store.data,picked);today.songs = today.songs.map(s => s.id === songId ? picked[0] : s); store.save(); value = snapshot(); break;
           }
           case 'openSong': await shell.openExternal('https://music.163.com/#/song?id=' + id(payload?.id)); value = true; break;
           case 'export': {
@@ -387,7 +404,8 @@ else {
       } catch (error) { return { ok: false, error: error.message || '操作暂未完成，请重试' }; }
     });
     createWindow(); setupTray();setupBubble();
-    setTimeout(automatic, 15000); setInterval(automatic, 60000).unref();
+    setTimeout(automatic, 15000); setInterval(()=>{changed();automatic();},60000).unref();
+    powerMonitor.on('resume',()=>{changed();automatic();});win.on('show',()=>{changed();automatic();});
     if(!smoke){setTimeout(()=>{if(store.data.settings.autoUpdate)updates.check();},120000);setInterval(()=>{if(store.data.settings.autoUpdate)updates.check();},14400000).unref();}
   });
   app.on('before-quit', () => { quitting = true;audioAnalysis?.close();playerWindow?.destroy();decodeWindow?.destroy();bubble?.destroy(); });

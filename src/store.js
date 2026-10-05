@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const defaults = () => ({ version: 2, profile: null, settings: { count: 20, exploration: 30, syncHour: 8, background: false, startup: false, selected: [], sourceConfirmed: false, analysisStarted: false, includeLikes: false, includeRecent: false, favoritePlaylist: null, avoidKnownArtists: true, floating: false, deepAudio: true, audioBatch: 24, autoUpdate: true, floatingMode: "dock", floatingPosition: null, repeatDays: 14, artistLimit: 1, albumLimit: 2, weights: {} }, library: [], likedIds: [], playlists: [], feedback: {}, favorites: {}, blockedArtists: [], history: [], lastSync: null, warnings: [], analysisArchive: {}, analysisRuns: [], analysis: { metadata: 0, lyrics: 0, audio: 0, pending: 0 } });
+const defaults = () => ({ version: 2, profile: null, settings: { count: 20, exploration: 30, syncHour: 8, background: false, startup: false, selected: [], sourceConfirmed: false, analysisStarted: false, includeLikes: false, includeRecent: false, favoritePlaylist: null, avoidKnownArtists: true, floating: false, deepAudio: true, audioBatch: 24, autoUpdate: true, floatingMode: "dock", floatingPosition: null, repeatDays: 14, artistLimit: 1, albumLimit: 2, weights: {}, avoidTypes: {}, avoidStrength: 85, appearance: {mode:"dark",material:"smooth",hue:140,saturation:40} }, library: [], likedIds: [], playlists: [], feedback: {}, favorites: {}, blockedArtists: [], history: [], lastSync: null, warnings: [], generationNumber: 0, seenRecommendations: [], dailyUpdate: {}, analysisArchive: {}, analysisRuns: [], analysis: { metadata: 0, lyrics: 0, audio: 0, pending: 0 } });
 class Store {
   constructor(dir) {
     this.file = path.join(dir, 'library.json');

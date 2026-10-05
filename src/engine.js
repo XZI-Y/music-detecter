@@ -1,5 +1,6 @@
 'use strict';
 const {audioSimilarity}=require('./audio-features');
+const {avoidedTypes}=require('./music-types');
 const WEIGHTS = { relation: .18, style: .13, mood: .05, theme: .05, language: .03, era: .02, duration: .02, feedback: .08, instruments: .20, rhythm: .08, timbre: .06, harmony: .04, dynamics: .03, vocal: .03, artist: 0 };
 const vocabulary = {
   mood: { 温暖: ['温暖', '温柔', '拥抱', '阳光', 'warm', 'gentle'], 忧伤: ['眼泪', '难过', '孤独', '悲伤', '寂寞', 'lonely', 'tears'], 希望: ['希望', '梦想', '勇敢', '未来', 'hope', 'dream'], 思念: ['想念', '思念', '回忆', '怀念', 'miss you', 'memories'] },
@@ -73,11 +74,14 @@ function recommend(candidates, data, date = dateKey(), omit = [], existing = [])
   const seeds = data.library.filter(s => data.feedback[s.id]?.value !== 'dislike' && !s.artists.some(a => data.blockedArtists.includes(a.id))).map(s => ({ ...s, localLiked: data.feedback[s.id]?.value === 'like' }));
   const known = new Set([...data.likedIds, ...seeds.map(s => s.id), ...omit]);
   const cutoff = Date.parse(date + 'T00:00:00+08:00') - (data.settings.repeatDays||14) * 86400000;
-  const recent = new Set(data.history.filter(h => h.date !== date && Date.parse(h.date + 'T00:00:00+08:00') >= cutoff).flatMap(h => h.songs.map(s => s.id)));
+  const recent = new Set(data.history.filter(h => Date.parse(h.date + 'T00:00:00+08:00') >= cutoff).flatMap(h => h.songs.map(s => s.id)));
+  const exposures=(data.seenRecommendations||[]).filter(r=>Date.parse(r.at)>=cutoff);
+  exposures.forEach(r=>recent.add(r.id));
+  const recentVersions=new Set([...data.history.filter(h=>Date.parse(h.date+'T00:00:00+08:00')>=cutoff).flatMap(h=>h.songs.map(identity)),...exposures.map(r=>r.identity)]);
   const blocked = new Set(data.blockedArtists);
   const knownArtists=new Set(data.library.flatMap(s=>s.artists.map(a=>a.id).filter(Boolean)));
   const unique = new Map();
-  for (const s of candidates) if (!known.has(s.id) && !recent.has(s.id) && !s.unavailable && data.feedback[s.id]?.value !== 'dislike' && data.feedback[s.id]?.value !== 'like' && !s.artists.some(a => blocked.has(a.id) || (data.settings.avoidKnownArtists!==false&&knownArtists.has(a.id)))) unique.set(s.id, { ...s, ...rankSong(s, seeds, data.feedback, data.settings) });
+  for (const s of candidates) if (!known.has(s.id) && !recent.has(s.id) && !recentVersions.has(identity(s)) && !s.unavailable && data.feedback[s.id]?.value !== 'dislike' && data.feedback[s.id]?.value !== 'like' && !s.artists.some(a => blocked.has(a.id) || (data.settings.avoidKnownArtists!==false&&knownArtists.has(a.id)))) {const avoided=avoidedTypes(s,data.settings);if(data.settings.avoidStrength===100&&avoided.length)continue;unique.set(s.id, { ...s, ...rankSong(s, seeds, data.feedback, data.settings),avoided });}
   const pool = [...unique.values()].sort((a, b) => b.score - a.score || hash(date + a.id) - hash(date + b.id));
   const chosen = [], artistCounts = new Map(), albumCounts = new Map(), identities = new Set();
   for (const song of existing) {
@@ -86,16 +90,19 @@ function recommend(candidates, data, date = dateKey(), omit = [], existing = [])
     if (song.albumId) albumCounts.set(song.albumId, (albumCounts.get(song.albumId) || 0) + 1);
   }
   const exploration = data.settings.exploration / 100;
+  const avoidedQuota=Math.floor(data.settings.count*(100-(data.settings.avoidStrength??85))/100);
   while (chosen.length < data.settings.count && pool.length) {
     const exploreSlot = Math.floor((chosen.length + 1) * exploration) > Math.floor(chosen.length * exploration);
     let bestIndex = -1, bestUtility = -Infinity;
     for (let i = 0; i < pool.length; i++) {
       const s = pool[i];
+      if(s.avoided.length&&chosen.filter(c=>c.avoided.length).length>=avoidedQuota)continue;
       if (identities.has(identity(s)) || s.artists.some(a => (artistCounts.get(a.id) || 0) >= (data.settings.artistLimit||1)) || (s.albumId && (albumCounts.get(s.albumId) || 0) >= (data.settings.albumLimit||2))) continue;
       const repeatedArtist = Math.max(0, ...s.artists.map(a => artistCounts.get(a.id) || 0));
       const sharedTags = chosen.length ? Math.max(0, ...chosen.map(c => overlap(c.tags, s.tags) || 0)) : 0;
-      const novelty = hash(date + ':' + s.id) / 4294967295;
-      const utility = s.score - repeatedArtist * .18 - sharedTags * .06 + (exploreSlot ? novelty * .3 + (s.sources?.some(x => x.type === 'explore') ? .12 : 0) : novelty * .015);
+      const novelty = hash(date + ':' +(data.generationNumber||0)+ ':' + s.id) / 4294967295;
+      const penalty=s.avoided.length?(data.settings.avoidStrength??85)/100*(.8+Math.min(.3,(s.avoided.length-1)*.1)):0;
+      const utility = s.score - penalty - repeatedArtist * .18 - sharedTags * .06 + (exploreSlot ? novelty * .3 + (s.sources?.some(x => x.type === 'explore') ? .12 : 0) : novelty * .015);
       if (utility > bestUtility) { bestUtility = utility; bestIndex = i; }
     }
     if (bestIndex < 0) break;

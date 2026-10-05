@@ -1,5 +1,6 @@
 'use strict';
 const { normalize, lexicalFeatures, hash, taste, dateKey } = require('./engine');
+const {avoidedTypes}=require('./music-types');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let keyInitialization;
 function lazyApi(){
@@ -79,12 +80,12 @@ class Connector {
     }
     return result;
   }
-  async playlist(id, limit = 200) {
+  async playlist(id, limit = 200, offset = 0) {
     const result = await this.call('playlist_detail', { id });
     const p = result.playlist;
     if (!p) throw new Error('该歌单暂时无法读取');
-    const ids = (p.trackIds || []).slice(0, limit).map(t => t.id);
-    let songs = (p.tracks || []).slice(0, limit).map(s => normalize(s, p.tags || []));
+    const ids = (p.trackIds || []).slice(offset, offset + limit).map(t => t.id);
+    let songs = (p.tracks || []).slice(offset, offset + limit).map(s => normalize(s, p.tags || []));
     if (ids.length > songs.length) songs = (await this.details(ids)).map(s => ({ ...s, tags: p.tags || [] }));
     return { songs, total: p.trackCount || ids.length, tags: p.tags || [] };
   }
@@ -165,15 +166,16 @@ class Connector {
     return { profile, likedIds, playlists, library, warnings, lastSync: new Date().toISOString() };
   }
   async candidates(data) {
-    const pool = new Map(), warnings = [...data.warnings];
+    const nonce=dateKey()+':'+(data.generationNumber||0),pool = new Map(), warnings = [...data.warnings];
     const usable = data.library.filter(s => data.feedback[s.id]?.value !== 'dislike' && !s.artists.some(a => data.blockedArtists.includes(a.id)));
+    const preferredTags=taste(usable).filter(({tag})=>!data.settings.avoidTypes?.style?.includes(tag));
     const seedOrder = [...usable].sort((a, b) => {
-      const priority = s => (data.feedback[s.id]?.value === 'like' ? 2 : 0) + (s.recent ? 1 : 0);
-      return priority(b) - priority(a) || hash(dateKey() + a.id) - hash(dateKey() + b.id);
+      const priority = s => (data.feedback[s.id]?.value === 'like' ? 2 : 0) + (s.recent ? 1 : 0)-avoidedTypes(s,data.settings).length*3;
+      return priority(b) - priority(a) || hash(nonce + a.id) - hash(nonce + b.id);
     });
     // Reserve seeds for the different observed playlist tags, then fill from recent and long-term taste.
     const selected = [], seen = new Set();
-    for (const { tag } of taste(usable).slice(0, 5)) {
+    for (const { tag } of preferredTags.slice(0, 5)) {
       const seed = seedOrder.find(s => s.tags.includes(tag) && !seen.has(s.id));
       if (seed) { selected.push(seed); seen.add(seed.id); }
     }
@@ -195,7 +197,7 @@ class Connector {
         const r = await this.call('simi_playlist', { id: seed.id });
         for (const list of (r.playlists || []).slice(0, 2)) {
           try {
-            const p = await this.playlist(list.id, 40);
+            const p = await this.playlist(list.id, 60, hash(nonce+list.id+'tracks')%Math.max(1,Math.min(200,(list.trackCount||60)-59)));
             if (!seed.tags.length) seed.tags = p.tags;
             for (const s of p.songs) add(s, { type: 'playlist', seedId: seed.id });
           } catch { /* retain other candidate channels */ }
@@ -204,10 +206,10 @@ class Connector {
     }
     if (failed) warnings.push(`${failed} 条歌曲关联暂不可用，已尝试其他来源。`);
     this.progress('补充相近风格和探索候选…');
-    for (const { tag } of taste(usable).slice(0, 3)) try {
-      const r = await this.call('top_playlist', { cat: tag, limit: 3 });
-      const list = (r.playlists || [])[hash(dateKey() + tag) % (r.playlists?.length || 1)];
-      if (list) for (const s of (await this.playlist(list.id, 40)).songs) add(s, { type: 'explore' });
+    for (const { tag } of preferredTags.slice(0, 3)) try {
+      const r = await this.call('top_playlist', { cat: tag, limit: 8, offset: hash(nonce+tag+'page')%3*8 });
+      const list = (r.playlists || [])[hash(nonce + tag) % (r.playlists?.length || 1)];
+      if (list) for (const s of (await this.playlist(list.id, 60, hash(nonce+list.id+'tracks')%Math.max(1,Math.min(200,(list.trackCount||60)-59)))).songs) add(s, { type: 'explore' });
     } catch { /* optional channel */ }
     try {
       const r = await this.call('recommend_songs');
@@ -230,7 +232,7 @@ class Connector {
       const existing = data.library.find(s => s.id === song.id);
       if (existing) { existing.features = song.features; existing.tags = song.tags; }
     }
-    candidates.sort((a, b) => Number(b.sources.some(s => s.type === 'similar')) - Number(a.sources.some(s => s.type === 'similar')) || hash(dateKey() + a.id) - hash(dateKey() + b.id));
+    candidates.sort((a, b) => Number(b.sources.some(s => s.type === 'similar')) - Number(a.sources.some(s => s.type === 'similar')) || hash(nonce + a.id) - hash(nonce + b.id));
     for (let i = 0; i < Math.min(candidates.length, 160); i++) {
       this.progress(`提取歌词线索 ${lyricSeeds.length + i + 1}/${lyricSeeds.length + Math.min(candidates.length, 160)}…`);
       candidates[i] = await this.enrich(candidates[i]);
