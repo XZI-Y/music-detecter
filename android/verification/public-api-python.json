@@ -1,0 +1,26 @@
+[
+  {
+    "endpoint": "v3/song/detail",
+    "http": 200,
+    "code": 200,
+    "songCount": 1,
+    "hasLyrics": false,
+    "hasPlayback": false
+  },
+  {
+    "endpoint": "song/lyric",
+    "http": 200,
+    "code": 200,
+    "songCount": 0,
+    "hasLyrics": true,
+    "hasPlayback": false
+  },
+  {
+    "endpoint": "song/enhance/player/url/v1",
+    "http": 200,
+    "code": 200,
+    "songCount": 0,
+    "hasLyrics": false,
+    "hasPlayback": false
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "endpoint": "v3/song/detail",
+    "error": "TypeError"
+  },
+  {
+    "endpoint": "song/lyric",
+    "error": "TypeError"
+  },
+  {
+    "endpoint": "song/enhance/player/url/v1",
+    "http": 200,
+    "code": 200,
+    "hasLyrics": false,
+    "hasPlayback": false
+  }
+]

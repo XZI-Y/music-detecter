@@ -1,0 +1,15 @@
+{
+  "tests": [
+    {
+      "tests": "11",
+      "failures": "0",
+      "errors": "0"
+    }
+  ],
+  "lint_errors": 0,
+  "lint_warnings": 17,
+  "apk_bytes": 23367630,
+  "sha256": "cb07e19922ec431fcadfa9a3cd71820e329055c0f22137b6adaac755302cc28d",
+  "device_validation": "pending Galaxy A17 account and playback testing",
+  "github_publication": "pending owner connection"
+}

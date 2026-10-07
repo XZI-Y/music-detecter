@@ -1,0 +1,32 @@
+name: Android APK
+on:
+  workflow_dispatch:
+  push:
+    paths: ['android/**', '.github/workflows/android.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - run: gradle -p android --no-daemon testDebugUnitTest lintRelease assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Radar-Android-unsigned
+          path: android/app/build/outputs/apk/release/*-unsigned.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Radar-Android-checks
+          path: |
+            android/app/build/reports/tests/
+            android/app/build/reports/lint-results-release.*

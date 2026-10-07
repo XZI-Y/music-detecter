@@ -1,0 +1,17 @@
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: CN=Radar Android, O=XZI-Y
+Signer #1 certificate SHA-256 digest: 61932e60b0e41ac9f9737ae7f2293214916c04fb53f9d66b4157683e7ffc32b7
+Signer #1 certificate SHA-1 digest: 0d3ccae0a40ae83212647b9ac3862653e3e56564
+Signer #1 certificate MD5 digest: 07055436852ae3ea86844151802894c0
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 3072
+Signer #1 public key SHA-256 digest: 4d3eb5367c1f81c6432ea6636a3bc27283106322fc5f72204a08d1c08989c5ab
+Signer #1 public key SHA-1 digest: f1c7897047228b80ab953dabc5dd06928b2b82ef
+Signer #1 public key MD5 digest: 693f11179ead5a1aaecf99d079af1066

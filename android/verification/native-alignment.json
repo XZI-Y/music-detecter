@@ -1,0 +1,25 @@
+[
+  {
+    "library": "lib/arm64-v8a/libandroidx.graphics.path.so",
+    "alignment": [
+      16384,
+      16384,
+      16384
+    ]
+  },
+  {
+    "library": "lib/arm64-v8a/libonnxruntime.so",
+    "alignment": [
+      16384,
+      16384,
+      16384
+    ]
+  },
+  {
+    "library": "lib/arm64-v8a/libonnxruntime4j_jni.so",
+    "alignment": [
+      16384,
+      16384
+    ]
+  }
+]
