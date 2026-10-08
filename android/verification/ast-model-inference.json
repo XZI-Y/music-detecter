@@ -1,0 +1,10 @@
+{
+  "input": "input_values",
+  "output": "logits",
+  "dims": [
+    1,
+    527
+  ],
+  "finite": true,
+  "fixture": "synthetic tones, not real-song accuracy validation"
+}

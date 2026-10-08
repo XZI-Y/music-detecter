@@ -14,7 +14,7 @@ if not key.exists():
  if result.returncode:raise RuntimeError('Unable to create persistent signing key')
 unsigned=project/'app/build/outputs/apk/release/app-release-unsigned.apk'
 if not unsigned.exists():raise RuntimeError('Build the release APK first')
-output=workspace/'outputs'/'Radar-Android-1.0.0.apk'
+output=workspace/'outputs'/'Radar-Android-1.0.2.apk'
 signer=Path(paths['sdk'])/'build-tools/35.0.0/apksigner.bat'
 command=[str(signer),'sign','--ks',str(key),'--ks-key-alias','radar-release','--ks-pass','file:'+str(password),'--out',str(output),str(unsigned)]
 environment=__import__('os').environ.copy();environment['JAVA_HOME']=paths['java']
@@ -27,7 +27,7 @@ if result.returncode:raise RuntimeError('APK signature verification failed')
 (project/'verification/signature.txt').write_bytes(result.stdout)
 print(result.stdout.decode(errors='replace'))
 sha=hashlib.sha256(output.read_bytes()).hexdigest()
-manifest={'versionCode':1,'versionName':'1.0.0','url':'https://github.com/XZI-Y/music-detecter/releases/download/android-v1.0.0/Radar-Android-1.0.0.apk','sha256':sha}
+manifest={'versionCode':3,'versionName':'1.0.2','url':'https://github.com/XZI-Y/music-detecter/releases/download/android-v1.0.2/Radar-Android-1.0.2.apk','sha256':sha}
 (project/'update.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-(workspace/'outputs'/'Radar-Android-1.0.0.sha256').write_text(sha+'  '+output.name+'\n',encoding='utf-8')
+(workspace/'outputs'/'Radar-Android-1.0.2.sha256').write_text(sha+'  '+output.name+'\n',encoding='utf-8')
 print(json.dumps({'apk':str(output),'bytes':output.stat().st_size,'sha256':sha}))

@@ -3,6 +3,8 @@ package io.github.xziy.radar
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -21,7 +23,8 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class Netease(private val store:Store,context:android.content.Context) {
- val client=OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(25,TimeUnit.SECONDS).callTimeout(40,TimeUnit.SECONDS).build()
+ @Volatile var fallbackDns=true
+ val client=OkHttpClient.Builder().dns(MusicDns{fallbackDns}).connectTimeout(15,TimeUnit.SECONDS).readTimeout(25,TimeUnit.SECONDS).callTimeout(40,TimeUnit.SECONDS).build()
  private val xeapi=Xeapi(context,store,client)
  companion object {
   private const val PUBLIC="MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgtQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB"
@@ -31,7 +34,7 @@ class Netease(private val store:Store,context:android.content.Context) {
   fun objects(a:JSONArray?)=(0 until (a?.length()?:0)).mapNotNull{a?.optJSONObject(it)}
   fun safePlaybackUrl(raw:String):String {val url=java.net.URI(raw.replaceFirst("http:","https:"));val host=url.host?.lowercase()?:"";require(url.scheme=="https"&&listOf("music.126.net","music.163.com","126.net","163.com").any{host==it||host.endsWith("."+it)}){"网易云返回的播放地址无效"};return url.toASCIIString()}
  }
- suspend fun call(path:String,data:JSONObject=JSONObject(),anonymous:Boolean=false):JSONObject=withContext(Dispatchers.IO) {
+ suspend fun call(path:String,data:JSONObject=JSONObject(),anonymous:Boolean=false,saveSession:Boolean=true,qrSession:Boolean=false):JSONObject=withContext(Dispatchers.IO) {
   val cookie=if(anonymous)"" else store.cookie()
   val cookies=cookie.split(';').mapNotNull {part->val i=part.indexOf('=');if(i>0)part.substring(0,i).trim() to part.substring(i+1).trim() else null}.toMap().toMutableMap()
   data.put("csrf_token",cookies["__csrf"]?:"");data.put("e_r",false)
@@ -42,19 +45,18 @@ class Netease(private val store:Store,context:android.content.Context) {
    val result=JSONObject(response.body?.string()?:"{}")
    val code=result.optInt("code",200)
    check(code in setOf(200,800,801,802,803)) {when(code){301,302->"登录已失效，请重新连接账号";405,406,415->"网易云要求额外验证，请使用二维码登录或稍后重试";else->"网易云暂未提供该数据（"+code+"）"}}
-   val changes=response.headers.values("Set-Cookie")
-   if(changes.isNotEmpty()){
-    val merged=store.cookie().split(';').mapNotNull{val i=it.indexOf('=');if(i>0)it.substring(0,i).trim() to it.substring(i+1).trim() else null}.toMap().toMutableMap()
-    changes.forEach{val part=it.substringBefore(';');val i=part.indexOf('=');if(i>0){val key=part.substring(0,i);val value=part.substring(i+1);if(value.isEmpty())merged.remove(key) else merged[key]=value}}
-    store.cookie(merged.entries.joinToString("; "){it.key+"="+it.value})
+   currentCoroutineContext().ensureActive()
+   if(saveSession&&(!qrSession||code==803)){
+    val changes=response.headers.values("Set-Cookie")+listOfNotNull(result.optString("cookie").takeIf{it.isNotBlank()})
+    if(changes.isNotEmpty()||qrSession)store.cookie(LoginCookies.merge(store.cookie(),changes,qrSession))
    }
    result
   }
  }
  suspend fun sendCode(phone:String,country:String){require(phone.matches(Regex("[0-9]{6,15}"))&&country.matches(Regex("[0-9]{1,4}"))){"请填写正确的号码和地区代码"};call("/api/sms/captcha/sent",json("cellphone" to phone,"ctcode" to country,"secrete" to "music_middleuser_pclogin"),true)}
  suspend fun login(phone:String,country:String,code:String):Profile {require(code.matches(Regex("[0-9]{4,8}"))){"请填写短信验证码"};call("/api/w/login/cellphone",json("type" to "1","https" to "true","phone" to phone,"countrycode" to country,"captcha" to code,"remember" to "true","secureCaptcha" to ""),true);return account()}
- suspend fun qr():String=call("/api/login/qrcode/unikey",json("type" to 3),true).optString("unikey").also{check(it.isNotEmpty()){"无法生成二维码"}}
- suspend fun qrCheck(key:String):Int=call("/api/login/qrcode/client/login",json("type" to 3,"key" to key),true).optInt("code")
+ suspend fun qr():String=call("/api/login/qrcode/unikey",json("type" to 3),true,saveSession=false).optString("unikey").also{check(it.isNotEmpty()){"无法生成二维码"}}
+ suspend fun qrCheck(key:String):Int=call("/api/login/qrcode/client/login",json("type" to 3,"key" to key),true,qrSession=true).optInt("code")
  suspend fun account():Profile {val p=call("/api/nuser/account/get").optJSONObject("profile");check(p!=null&&p.optLong("userId")>0){"请先登录网易云"};return Profile(p!!.optLong("userId"),p.optString("nickname","网易云用户"))}
  suspend fun playlists(uid:Long):List<Playlist>{val lists=mutableListOf<Playlist>();var offset=0;do{val r=call("/api/user/playlist",json("uid" to uid,"limit" to 100,"offset" to offset));val entries=objects(r.optJSONArray("playlist"));lists+=entries.map{Playlist(it.optLong("id"),it.optString("name"),it.optInt("trackCount"),it.optJSONObject("creator")?.optLong("userId")?:0,strings(it.optJSONArray("tags")),it.optInt("specialType"))};offset+=100;if(!r.optBoolean("more")||entries.isEmpty())break}while(offset<10000);return lists.distinctBy{it.id}}
  suspend fun playlist(id:Long):JSONObject=call("/api/v6/playlist/detail",json("id" to id,"n" to 100000,"s" to 0)).getJSONObject("playlist")

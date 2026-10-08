@@ -22,6 +22,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -134,7 +138,7 @@ private fun liked(data:Data,song:Song?)=song!=null&&song.id in data.settings.fav
  }
 }
 @Composable fun Taste(d:Data,save:(Settings)->Unit,material:String){
- var factor by remember{mutableStateOf("style")};Intro("音乐里的你","我的偏好","已分析 "+d.library.size+" 首 · 乐器识别 "+d.library.count{it.audio!=null}+" 首")
+ var factor by remember{mutableStateOf("style")};Intro("音乐里的你","我的偏好","已分析 "+d.library.size+" 首 · 音频已分析 "+d.library.count{it.audio!=null}+" 首 · 检出乐器 "+d.library.count{it.audio?.instruments?.isNotEmpty()==true}+" 首")
  if(d.library.isEmpty()){Panel(material){Text("完成歌单分析后，这里会保存你的音乐偏好。")};return}
  Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical=14.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){dimensionNames.forEach{(key,title)->FilterChip(selected=factor==key,onClick={factor=key},label={Text(title)})}}
  val distribution=Engine.distribution(d.library,factor)
@@ -158,6 +162,14 @@ private fun liked(data:Data,song:Song?)=song!=null&&song.id in data.settings.fav
   if(d.analyzed)TextButton(onClick=more,enabled=!busy){Text("继续补充歌词与音频分析")}
  }
  Panel(material){Text("收藏目标",style=MaterialTheme.typography.titleMedium);val lists=d.playlists.filter{it.ownerId==d.profile.id};var expanded by remember{mutableStateOf(false)};Box{OutlinedButton(onClick={expanded=true},enabled=!busy){Text(lists.find{it.id==d.settings.favorite}?.name?:"请选择你的收藏歌单")};DropdownMenu(expanded=expanded,onDismissRequest={expanded=false}){lists.forEach{p->DropdownMenuItem(text={Text(p.name)},onClick={save(d.settings.copy(favorite=p.id));expanded=false})}}};Text("点爱心时写入这个网易云歌单。",style=MaterialTheme.typography.bodySmall)}
+ Panel(material){Text("本轮音频分析",style=MaterialTheme.typography.titleMedium);val report=d.audioReport
+  Text(when(report.state){"disabled"->"乐器识别未开启";"wifi_wait"->"正在等待 Wi-Fi，本轮未进行音频识别";"preparing"->"正在检查模型";"ready"->"模型已就绪，正在分析音频";"model_error"->"模型暂未就绪，下载进度及已有分析保留";"network_error"->"网易云连接失败，音频分析已暂停";"partial"->"部分音频未完成，可立即重试";"complete"->"本轮音频分析已结束";else->"尚未进行音频分析"},modifier=Modifier.padding(vertical=8.dp))
+  Text("尝试 ${report.attempted} 首 · 完成 ${report.completed} 首 · 检出乐器 ${report.identified} 首 · 失败 ${report.failed} 首",style=MaterialTheme.typography.bodySmall)
+  if(report.completed>report.identified)Text("已分析但未检出可靠乐器：${report.completed-report.identified} 首",style=MaterialTheme.typography.bodySmall)
+  if(report.lastError.isNotEmpty())Text(report.lastError,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+  if(d.analyzed)TextButton(onClick=more,enabled=!busy&&d.settings.deepAudio){Text("继续分析 / 重试未完成歌曲")}
+ }
+ Panel(material){SettingSwitch("备用域名解析",d.settings.fallbackDns,{save(d.settings.copy(fallbackDns=it))});Text("系统无法解析网易云域名时，尝试阿里公共 HTTPS DNS；仅查询域名，不发送账号信息。",style=MaterialTheme.typography.bodySmall)}
  Panel(material){SettingSwitch("乐器识别",d.settings.deepAudio,{save(d.settings.copy(deepAudio=it))});Text("首次下载约 91 MB 模型，随后在手机本地识别。",style=MaterialTheme.typography.bodySmall);SettingSwitch("模型和音频分析仅用 Wi-Fi",d.settings.wifiOnly,{save(d.settings.copy(wifiOnly=it))});Choice("每轮分析预算",d.settings.audioBatch,listOf(12,24,48,72),{save(d.settings.copy(audioBatch=it))}){it.toString()+" 首"}}
 }
 @Composable fun <T> Choice(title:String,value:T,options:List<T>,change:(T)->Unit,label:(T)->String={it.toString()}){
@@ -177,19 +189,25 @@ private fun liked(data:Data,song:Song?)=song!=null&&song.id in data.settings.fav
  if(logout)AlertDialog(onDismissRequest={logout=false},title={Text("退出账号？")},text={Text("这台手机的账号和音乐资料会清除，网易云歌单不会删除。")},confirmButton={TextButton(onClick={logout=false;player.clear();vm.run{vm.repo.logout()}}){Text("退出")}},dismissButton={TextButton(onClick={logout=false}){Text("取消")}})
 }
 @Composable fun LoginDialog(vm:RadarViewModel,dismiss:()->Unit){
- var phone by remember{mutableStateOf("")};var country by remember{mutableStateOf("86")};var code by remember{mutableStateOf("")};var qrKey by remember{mutableStateOf("")};var hint by remember{mutableStateOf("")};var cooldown by remember{mutableIntStateOf(0)};val busy by vm.repo.busy.collectAsStateWithLifecycle();val context=LocalContext.current
+ var phone by remember{mutableStateOf("")};var country by remember{mutableStateOf("86")};var code by remember{mutableStateOf("")};var qrKey by rememberSaveable{mutableStateOf("")};var hint by remember{mutableStateOf("")};var cooldown by remember{mutableIntStateOf(0)};val busy by vm.repo.busy.collectAsStateWithLifecycle();val context=LocalContext.current
  LaunchedEffect(cooldown){if(cooldown>0){delay(1000);cooldown--}}
  val loginScope=rememberCoroutineScope();var connecting by remember{mutableStateOf(false)}
  fun perform(block:suspend()->Unit){if(connecting)return;loginScope.launch{connecting=true;try{block()}catch(e:CancellationException){throw e}catch(e:Exception){hint=e.message?:"连接失败，请重试"}finally{connecting=false}}}
+ var qrAuthorized by rememberSaveable(qrKey){mutableStateOf(false)}
+ var qrProblem by remember{mutableStateOf(false)};val owner=LocalLifecycleOwner.current;val latestDismiss by rememberUpdatedState(dismiss)
+ LaunchedEffect(qrKey){if(qrKey.isNotEmpty())owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED){if(!qrProblem){try{
+  if(!qrAuthorized){awaitQrConfirmation({vm.repo.api.qrCheck(qrKey)},{state->hint=when(state){801->"等待扫码，请在网易云中扫描二维码";802->"已扫码，请在网易云确认登录";803->"确认成功，正在读取账号…";else->"二维码已过期"}});qrAuthorized=true}
+  connecting=true;vm.repo.finishQr();latestDismiss()
+ }catch(e:CancellationException){throw e}catch(e:Exception){qrProblem=true;hint=e.message?:"扫码连接失败，请重新生成二维码"}finally{connecting=false}}}}
  val bitmap=remember(qrKey){if(qrKey.isEmpty())null else QRCodeWriter().encode("https://music.163.com/login?codekey="+qrKey,BarcodeFormat.QR_CODE,240,240).let{matrix->Bitmap.createBitmap(240,240,Bitmap.Config.ARGB_8888).apply{for(y in 0 until 240)for(x in 0 until 240)setPixel(x,y,if(matrix[x,y])android.graphics.Color.BLACK else android.graphics.Color.WHITE)}}}
  AlertDialog(onDismissRequest=dismiss,title={Text("连接网易云音乐")},text={Column(Modifier.verticalScroll(rememberScrollState())){
   if(bitmap==null){Row{OutlinedTextField(value=country,onValueChange={country=it.filter{c->c.isDigit()}.take(4)},label={Text("区号")},modifier=Modifier.width(80.dp),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number));Spacer(Modifier.width(8.dp));OutlinedTextField(value=phone,onValueChange={phone=it.filter{c->c.isDigit()}.take(15)},label={Text("手机号")},modifier=Modifier.weight(1f),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Phone))}
    OutlinedTextField(value=code,onValueChange={code=it.filter{c->c.isDigit()}.take(8)},label={Text("短信验证码")},modifier=Modifier.fillMaxWidth().padding(top=12.dp),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number))
    TextButton(onClick={perform{vm.repo.operation{vm.repo.api.sendCode(phone,country)};cooldown=60;hint="验证码已发送"}},enabled=!busy&&!connecting&&cooldown==0){Text(if(cooldown>0)cooldown.toString()+" 秒后重发" else "发送验证码")}
   }else{Image(bitmap.asImageBitmap(),"网易云登录二维码",Modifier.fillMaxWidth().height(220.dp));Text("在网易云中扫描并确认，也可保存后从相册识别。",style=MaterialTheme.typography.bodySmall);if(Build.VERSION.SDK_INT>=29)TextButton(onClick={try{val values=ContentValues().apply{put(MediaStore.Images.Media.DISPLAY_NAME,"雷达登录二维码.png");put(MediaStore.Images.Media.MIME_TYPE,"image/png");put(MediaStore.Images.Media.RELATIVE_PATH,"Pictures/Radar")};val uri=context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)?:error("无法保存");context.contentResolver.openOutputStream(uri)?.use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)};hint="已保存到相册"}catch(_:Exception){hint="保存失败，请重试"}}){Text("保存二维码")}}
-  TextButton(onClick={if(qrKey.isNotEmpty()){qrKey="";hint=""}else perform{qrKey=vm.repo.api.qr();hint="请在网易云确认后点击完成登录"}},enabled=!busy&&!connecting){Text(if(qrKey.isEmpty())"使用二维码登录" else "使用短信登录")}
+  TextButton(onClick={if(qrKey.isNotEmpty()){qrKey="";qrProblem=false;hint=""}else perform{qrProblem=false;qrKey=vm.repo.api.qr();hint="等待扫码，请在网易云中确认登录"}},enabled=!busy&&!connecting){Text(if(qrKey.isEmpty())"使用二维码登录" else "使用短信登录")}
   if(hint.isNotEmpty())Text(hint,style=MaterialTheme.typography.bodySmall)
- }},confirmButton={TextButton(enabled=!busy&&!connecting,onClick={perform{if(qrKey.isEmpty())vm.repo.login(phone,country,code) else{val state=vm.repo.api.qrCheck(qrKey);check(state==803){if(state==800)"二维码已过期，请重新生成" else "请先在网易云扫描并确认登录"};vm.repo.finishQr()};dismiss()}}){Text(if(busy||connecting)"连接中…" else "完成登录")}},dismissButton={TextButton(onClick=dismiss){Text("取消")}})
+  }},confirmButton={TextButton(enabled=!busy&&!connecting&&(qrKey.isEmpty()||qrProblem),onClick={perform{if(qrKey.isEmpty()){vm.repo.login(phone,country,code);dismiss()} else{qrProblem=false;qrKey=vm.repo.api.qr();hint="等待扫码，请在网易云中确认登录"}}}){Text(if(connecting||busy)"连接中…" else if(qrKey.isEmpty())"完成登录" else if(qrProblem)"重新生成二维码" else "等待确认…")}},dismissButton={TextButton(onClick=dismiss){Text("取消")}})
 }
 @Composable fun FullPlayer(connection:PlayerConnection,p:Playing,data:Data,dismiss:()->Unit,heart:(Song)->Unit,toggle:()->Unit,repo:Repository){
  val song=p.song;val context=LocalContext.current;val raw=song?.let{s->data.archive.find{it.id==s.id}?.lyrics?.ifEmpty{s.lyrics}?:s.lyrics}.orEmpty();val lines=remember(raw){lyricLines(raw)};val current=lines.indexOfLast{it.time<=p.position}.coerceAtLeast(0);val lyricState=rememberLazyListState();var dragging by remember{mutableStateOf(false)};var seek by remember{mutableFloatStateOf(0f)};var queue by remember{mutableStateOf(false)}

@@ -25,10 +25,10 @@ class Repository(val context:Context){
  @Volatile private var activeOperation:Job?=null
  fun pause(){activeOperation?.cancel()}
  private val mutex=Mutex();private val saveScope=CoroutineScope(SupervisorJob()+Dispatchers.IO);private val saves=Channel<Unit>(Channel.CONFLATED)
- init{saveScope.launch{for(signal in saves){delay(150);try{store.save(mutable.value)}catch(_:Exception){error.value="无法保存音乐资料，请检查手机剩余空间"}}}}
+ init{api.fallbackDns=data.value.settings.fallbackDns;saveScope.launch{for(signal in saves){delay(150);try{store.save(mutable.value)}catch(_:Exception){error.value="无法保存音乐资料，请检查手机剩余空间"}}}}
  @Synchronized fun update(f:(Data)->Data){mutable.value=f(mutable.value);saves.trySend(Unit)}
- fun settings(s:Settings){val old=data.value.settings;update{it.copy(settings=s,analyzed=if(s.selected!=old.selected)false else it.analyzed)};schedule()}
- suspend fun operation(block:suspend ()->Unit){mutex.withLock{activeOperation=currentCoroutineContext()[Job];busy.value=true;error.value="";try{withContext(Dispatchers.IO){block()}}catch(e:CancellationException){status.value="已暂停，已完成的分析会保留";throw e}catch(e:Exception){error.value=e.message?.take(180)?:"操作失败，请稍后重试";throw e}finally{activeOperation=null;busy.value=false}}}
+ fun settings(s:Settings){api.fallbackDns=s.fallbackDns;val old=data.value.settings;update{it.copy(settings=s,analyzed=if(s.selected!=old.selected)false else it.analyzed)};schedule()}
+ suspend fun operation(block:suspend ()->Unit){mutex.withLock{activeOperation=currentCoroutineContext()[Job];busy.value=true;error.value="";try{withContext(Dispatchers.IO){block()}}catch(e:CancellationException){status.value="已暂停，已完成的分析会保留";throw e}catch(e:Exception){error.value=NetworkProblems.message(e);throw e}finally{activeOperation=null;busy.value=false}}}
  suspend fun login(phone:String,country:String,code:String){operation{connected(api.login(phone,country,code))}}
  suspend fun finishQr(){operation{connected(api.account())}}
  private suspend fun connected(profile:Profile){val lists=api.playlists(profile.id);update{old->if(old.profile?.id!=profile.id)Data(profile=profile,playlists=lists,settings=old.settings.copy(selected=emptyList(),favorite=null)) else old.copy(profile=profile,playlists=lists)}}
@@ -49,18 +49,32 @@ class Repository(val context:Context){
  }}
  private suspend fun ensureActive(){currentCoroutineContext().ensureActive()}
  private fun wifi():Boolean{val manager=context.getSystemService(ConnectivityManager::class.java);return manager.getNetworkCapabilities(manager.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true}
- private suspend fun enrichLibrary(settings:Settings){
-  val budget=settings.audioBatch.coerceIn(12,72);var lyrics=0;var audio=0
+ private suspend fun enrichLibrary(settings:Settings,manualRetry:Boolean=false){
+  val budget=settings.audioBatch.coerceIn(12,72);var lyrics=0;var report=AudioReport(state=if(!settings.deepAudio)"disabled" else if(settings.wifiOnly&&!wifi())"wifi_wait" else "preparing")
   val model=if(settings.deepAudio&&(!settings.wifiOnly||wifi()))AudioAnalyzer(context,api){status.value=it} else null
+  fun publish(){update{it.copy(audioReport=report)}}
+  publish()
   try{
-   for(song in data.value.library){ensureActive();var next=song
-    if(song.lyrics.isEmpty()&&song.id !in data.value.lyricsChecked&&lyrics<budget){lyrics++;status.value="分析歌词 · "+lyrics+" / "+budget;try{next=Engine.lexical(next,api.lyric(song.id));update{it.copy(lyricsChecked=(it.lyricsChecked+song.id).distinct())}}catch(e:CancellationException){throw e}catch(_:Exception){}}
-    if(model!=null&&next.audio==null&&data.value.audioAttempts[next.id]!=day()&&audio<budget){audio++;status.value="识别乐器 · "+audio+" / "+budget;try{next=next.copy(audio=model.analyze(next.id))}catch(e:CancellationException){throw e}catch(e:Exception){status.value="音频分析暂未完成，已保留基础分析："+(e.message?:"");update{it.copy(audioAttempts=it.audioAttempts+(song.id to day()))}}}
+   if(model!=null)try{status.value="正在检查音频模型";model.ensureReady();report=report.copy(state="ready");publish()}catch(e:CancellationException){throw e}catch(e:Exception){report=report.copy(state="model_error",lastError=NetworkProblems.message(e));publish();return}
+   val ordered=data.value.library.sortedWith(compareBy<Song>{if(data.value.audioAttempts[it.id]==day())1 else 0}.thenBy{if(it.audio==null)0 else 1})
+   for(song in ordered){ensureActive();var next=song
+    if(song.lyrics.isEmpty()&&song.id !in data.value.lyricsChecked&&lyrics<budget){lyrics++;status.value="分析歌词 · "+lyrics+" / "+budget
+     try{next=Engine.lexical(next,api.lyric(song.id));update{it.copy(lyricsChecked=(it.lyricsChecked+song.id).distinct())}}catch(e:CancellationException){throw e}catch(e:Exception){if(NetworkProblems.dns(e)){report=report.copy(state="network_error",lastError=NetworkProblems.message(e));publish();break}}
+    }
+    val needsAudio=next.audio?.model!=AudioAnalyzer.VERSION
+    val retryAllowed=manualRetry||data.value.audioAttempts[next.id]!=day()
+    if(model!=null&&needsAudio&&retryAllowed&&report.attempted<budget){
+     report=report.copy(attempted=report.attempted+1);status.value="识别乐器 · "+report.attempted+" / "+budget;publish()
+     try{next=next.copy(audio=model.analyze(next.id));report=report.copy(completed=report.completed+1,identified=report.identified+if(next.audio!!.instruments.isNotEmpty())1 else 0);update{it.copy(audioAttempts=it.audioAttempts-song.id)}}catch(e:CancellationException){throw e}catch(e:Exception){report=report.copy(failed=report.failed+1,lastError=NetworkProblems.message(e));if(NetworkProblems.dns(e)){report=report.copy(state="network_error");publish();break};update{it.copy(audioAttempts=it.audioAttempts+(song.id to day()))}}
+     publish()
+    }
     if(next!=song){val saved=next;update{it.copy(library=it.library.map{s->if(s.id==saved.id)saved else s},archive=(it.archive.filterNot{s->s.id==saved.id}+saved))}}
    }
+   if(report.state=="ready")report=report.copy(state=if(report.failed>0)"partial" else "complete")
+   publish()
   }finally{model?.close()}
  }
- suspend fun moreAnalysis(){operation{check(data.value.analyzed){"请先完成歌单分析"};enrichLibrary(data.value.settings);status.value="本轮分析完成，已有结果保留"}}
+ suspend fun moreAnalysis(){operation{check(data.value.analyzed){"请先完成歌单分析"};enrichLibrary(data.value.settings,manualRetry=true);status.value="本轮分析结束，详细结果已保存在分析页"}}
  suspend fun generate(){operation{generateInternal()}}
  private suspend fun generateInternal(){
   val d=data.value;check(d.analyzed&&d.library.isNotEmpty()){"请先选择歌单并开始分析"};check(api.account().id==d.profile?.id){"账号已变化，请重新连接"};status.value="查找新的音乐"
@@ -90,7 +104,7 @@ class Repository(val context:Context){
 }
 class DailyWorker(context:Context,parameters:WorkerParameters):CoroutineWorker(context,parameters){override suspend fun doWork():Result=try{val repo=(applicationContext as RadarApp).repo;repo.dailyIfNeeded();repo.schedule();Result.success()}catch(_:CancellationException){throw CancellationException()}catch(_:Exception){Result.retry()}}
 class RadarViewModel(app:Application):AndroidViewModel(app){val repo=(app as RadarApp).repo;val message=MutableStateFlow("");private var operation:Job?=null
- fun run(block:suspend()->Unit){operation=viewModelScope.launch{try{block()}catch(_:CancellationException){}catch(e:Exception){message.value=e.message?:"操作失败"}}}
+ fun run(block:suspend()->Unit){operation=viewModelScope.launch{try{block()}catch(_:CancellationException){}catch(e:Exception){message.value=NetworkProblems.message(e)}}}
  fun pause(){operation?.cancel();repo.pause()}
  init{repo.schedule();run{repo.dailyIfNeeded()}}
 }

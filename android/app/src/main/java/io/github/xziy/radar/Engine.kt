@@ -15,7 +15,7 @@ object Engine {
   for((seedIndex,seed) in seeds.withIndex()){if(seedIndex%64==0)checkpoint();
    val a=song.audio;val b=seed.audio
    val parts=linkedMapOf<String,Double?>("relation" to if(seed.id in song.seedIds)1.0 else null,"style" to overlap(song.tags,seed.tags),"mood" to overlap(song.mood,seed.mood),"theme" to overlap(song.theme,seed.theme),"language" to if(song.language!=null&&seed.language!=null)if(song.language==seed.language)1.0 else 0.0 else null,"era" to if(song.year!=null&&seed.year!=null)max(0.0,1-abs(song.year-seed.year)/20.0) else null,"duration" to if(song.duration>0&&seed.duration>0)max(0.0,1-abs(song.duration-seed.duration)/180000.0) else null,"feedback" to if(data.feedback[seed.id]=="like")1.0 else .3)
-   parts["instruments"]=if(a!=null&&b!=null)overlap(a.instruments.map{it.name},b.instruments.map{it.name}) else null
+   parts["instruments"]=if(a!=null&&b!=null&&a.instruments.isNotEmpty()&&b.instruments.isNotEmpty())overlap(a.instruments.map{it.name},b.instruments.map{it.name}) else null
    parts["rhythm"]=if(a?.bpm!=null&&b?.bpm!=null)max(0.0,1-abs(a.bpm-b.bpm)/70) else null
    parts["timbre"]=if((a?.brightness?:0.0)>0&&(b?.brightness?:0.0)>0)exp(-abs(ln(a!!.brightness!!/b!!.brightness!!))) else null
    parts["harmony"]=if(a!=null&&b!=null)cosine(a.chroma,b.chroma) else null
