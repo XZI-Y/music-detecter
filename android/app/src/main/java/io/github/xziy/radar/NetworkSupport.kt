@@ -14,6 +14,7 @@ import javax.net.ssl.SSLException
 object NetworkProblems {
  fun dns(error:Throwable):Boolean=generateSequence(error){it.cause?.takeIf{c->c!==it}}.take(12).any{it is UnknownHostException}
  fun message(error:Throwable):String=when {
+  error is UpdateConnectionException->error.message.orEmpty()
   dns(error)->"网易云域名解析失败，请检查网络、代理或系统私有 DNS；已有分析结果已保留"
   generateSequence(error){it.cause?.takeIf{c->c!==it}}.take(12).any{it is SocketTimeoutException}->"网易云连接超时，请稍后重试；已有分析结果已保留"
   error is SSLException->"安全连接未建立，请检查网络及手机日期时间"

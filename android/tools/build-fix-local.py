@@ -14,7 +14,7 @@ while True:
   code=process.wait()
  if code==0:
   meta=json.loads((project/'app/build/outputs/apk/release/output-metadata.json').read_text())
-  assert meta['elements'][0]['versionCode']==3 and meta['elements'][0]['versionName']=='1.0.2'
+  assert meta['elements'][0]['versionCode']==4 and meta['elements'][0]['versionName']=='1.0.3'
   result=subprocess.run([sys.executable,str(project/'tools/sign-local.py')],env=env)
   if result.returncode==0:print('RADAR FIX BUILD AND SIGN COMPLETE',flush=True);break
  print('BUILD PAUSED. Keep this window open; Codex can fix and retry.',flush=True)

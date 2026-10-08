@@ -3,6 +3,18 @@ package io.github.xziy.radar
 import kotlin.math.*
 
 object AudioFeatures {
+ fun resample(samples:FloatArray,sourceRate:Int,targetRate:Int=16000,maxSeconds:Int=30):FloatArray {
+  require(sourceRate>0&&targetRate>0&&maxSeconds>0){"音频采样率无效"}
+  if(samples.isEmpty())return FloatArray(0)
+  val size=minOf(samples.size.toLong()*targetRate/sourceRate,targetRate.toLong()*maxSeconds,Int.MAX_VALUE.toLong()).toInt()
+  return FloatArray(size){i->
+   // Convert before multiplying: Int arithmetic overflows after ~3 seconds at 44.1 kHz.
+   val at=i.toDouble()*sourceRate/targetRate
+   val left=at.toInt().coerceIn(0,samples.lastIndex);val right=min(left+1,samples.lastIndex)
+   (samples[left]+(samples[right]-samples[left])*(at-left).coerceIn(0.0,1.0)).toFloat()
+  }
+ }
+
  fun fft(real:DoubleArray,imag:DoubleArray){val n=real.size;var j=0;for(i in 1 until n){var bit=n shr 1;while(j and bit!=0){j=j xor bit;bit=bit shr 1};j=j xor bit;if(i<j){val a=real[i];real[i]=real[j];real[j]=a;val b=imag[i];imag[i]=imag[j];imag[j]=b}};var size=2;while(size<=n){for(start in 0 until n step size)for(k in 0 until size/2){val angle=-2*PI*k/size;val a=start+k;val b=a+size/2;val tr=cos(angle)*real[b]-sin(angle)*imag[b];val ti=sin(angle)*real[b]+cos(angle)*imag[b];real[b]=real[a]-tr;imag[b]=imag[a]-ti;real[a]+=tr;imag[a]+=ti};size*=2}}
  fun fbank(samples:FloatArray):FloatArray {
   val result=FloatArray(1024*128);val melPoints=DoubleArray(130){i->1127*ln(1+20.0/700)+(1127*ln(1+8000.0/700)-1127*ln(1+20.0/700))*i/129}

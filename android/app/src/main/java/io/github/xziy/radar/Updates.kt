@@ -12,6 +12,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.Request
+import okhttp3.Protocol
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -19,8 +22,20 @@ import java.security.MessageDigest
 data class UpdateRelease(val code:Int,val name:String,val url:String,val sha:String)
 class Updates(private val context:Context,private val api:Netease){
  suspend fun check():UpdateRelease?=withContext(Dispatchers.IO){
-  val request=Request.Builder().url("https://raw.githubusercontent.com/XZI-Y/music-detecter/main/android/update.json").header("Cache-Control","no-cache").build()
-  api.client.newCall(request).execute().use{r->if(r.code==404)return@withContext null;check(r.isSuccessful){"无法检查更新，请稍后重试"};val j=JSONObject(r.body!!.string());val code=j.getInt("versionCode");val installed=context.packageManager.getPackageInfo(context.packageName,0);val installedCode=if(Build.VERSION.SDK_INT>=28)installed.longVersionCode else installed.versionCode.toLong();if(code.toLong()<=installedCode)return@withContext null;val url=j.getString("url");val uri=Uri.parse(url);check(uri.scheme=="https"&&uri.host=="github.com"&&uri.path?.startsWith("/XZI-Y/music-detecter/releases/download/android-")==true){"更新地址无效"};val sha=j.getString("sha256").lowercase();check(sha.matches(Regex("[0-9a-f]{64}"))){"更新校验信息无效"};UpdateRelease(code,j.getString("versionName"),url,sha)}
+  val client=api.client.newBuilder().protocols(listOf(Protocol.HTTP_1_1)).connectTimeout(5,TimeUnit.SECONDS).readTimeout(8,TimeUnit.SECONDS).callTimeout(12,TimeUnit.SECONDS).build()
+  val coroutine=currentCoroutineContext()
+  val raw=UpdateNetwork.fetch{url->
+   coroutine.ensureActive()
+   val request=Request.Builder().url(url).header("Cache-Control","no-cache").header("Accept","application/vnd.github.raw+json").header("User-Agent","Radar-Android-Updater").build()
+   try{client.newCall(request).execute().use{r->
+    if(!r.isSuccessful)throw IOException("更新服务返回 HTTP ${r.code}")
+    val body=r.body?:throw IOException("更新服务未返回内容")
+    body.byteStream().use{input->val bytes=input.readBytesLimited(16384);String(bytes,Charsets.UTF_8)}
+   }}catch(e:IOException){coroutine.ensureActive();throw e}
+  }
+  coroutine.ensureActive()
+  val j=JSONObject(raw);val code=j.getInt("versionCode");val installed=context.packageManager.getPackageInfo(context.packageName,0);val installedCode=if(Build.VERSION.SDK_INT>=28)installed.longVersionCode else installed.versionCode.toLong();if(code.toLong()<=installedCode)return@withContext null;val url=j.getString("url");val uri=Uri.parse(url);check(uri.scheme=="https"&&uri.host=="github.com"&&uri.path?.startsWith("/XZI-Y/music-detecter/releases/download/android-")==true){"更新地址无效"};val sha=j.getString("sha256").lowercase();check(sha.matches(Regex("[0-9a-f]{64}"))){"更新校验信息无效"};UpdateRelease(code,j.getString("versionName"),url,sha)
+
  }
  suspend fun download(release:UpdateRelease,progress:(String)->Unit):File=withContext(Dispatchers.IO){
   val dir=File(context.cacheDir,"updates").apply{mkdirs()};val file=File(dir,"radar-"+release.code+".apk");val part=File(dir,file.name+".part")
@@ -36,4 +51,10 @@ class Updates(private val context:Context,private val api:Netease){
   if(!context.packageManager.canRequestPackageInstalls()){context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+context.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return false}
   val uri=FileProvider.getUriForFile(context,context.packageName+".files",file);context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK));return true
  }
+}
+
+private fun java.io.InputStream.readBytesLimited(limit:Int):ByteArray {
+ val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(4096)
+ while(true){val n=read(buffer);if(n<0)break;check(out.size()+n<=limit){"更新信息大小异常"};out.write(buffer,0,n)}
+ return out.toByteArray()
 }

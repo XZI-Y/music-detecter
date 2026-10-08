@@ -23,9 +23,14 @@ def api(path,method='GET',data=None):
   if not any(term in message.lower() for term in ['eof','timeout','connection','handshake']):raise RuntimeError('GitHub CLI: '+message)
   if attempt<4:time.sleep(2**attempt)
  raise RuntimeError('GitHub CLI: '+message)
-apk=workspace/'outputs/Radar-Android-1.0.2.apk'
+apk=workspace/'outputs/Radar-Android-1.0.3.apk'
 manifest=json.loads((project/'update.json').read_text())
-assert manifest['versionCode']==3 and manifest['versionName']=='1.0.2'
+if not apk.exists() or manifest.get('versionCode')!=4 or manifest.get('versionName')!='1.0.3':
+ print('Building and verifying Android 1.0.3 before publishing',flush=True)
+ if subprocess.run([sys.executable,str(project/'tools/build-fix-local.py')],env=env).returncode:
+  raise RuntimeError('Build did not complete; no release will be published')
+ manifest=json.loads((project/'update.json').read_text())
+assert manifest['versionCode']==4 and manifest['versionName']=='1.0.3'
 assert hashlib.sha256(apk.read_bytes()).hexdigest()==manifest['sha256']
 checks=project/'app/build/test-results/testDebugUnitTest'
 reports=list(checks.glob('TEST-*.xml'))
@@ -52,20 +57,20 @@ workflow=(project/'.github/android-build.yml').read_bytes()
 sha=api('repos/'+repo+'/git/blobs','POST',{'content':base64.b64encode(workflow).decode(),'encoding':'base64'})['sha']
 entries.append({'path':'.github/workflows/android.yml','mode':'100644','type':'blob','sha':sha})
 tree=api('repos/'+repo+'/git/trees','POST',{'base_tree':commit['tree']['sha'],'tree':entries})
-new=api('repos/'+repo+'/git/commits','POST',{'message':'Fix Android audio analysis recovery and music DNS fallback','tree':tree['sha'],'parents':[parent],'author':author,'committer':author})
+new=api('repos/'+repo+'/git/commits','POST',{'message':'Fix PCM resampling overflow and update connection fallback','tree':tree['sha'],'parents':[parent],'author':author,'committer':author})
 api('repos/'+repo+'/git/refs/heads/'+branch,'PATCH',{'sha':new['sha'],'force':False})
-tag='android-v1.0.2'
+tag='android-v1.0.3'
 try:
  release=api('repos/'+repo+'/releases/tags/'+tag)
 except RuntimeError as e:
  if 'HTTP 404' not in str(e):raise
- release=api('repos/'+repo+'/releases','POST',{'tag_name':tag,'target_commitish':new['sha'],'name':'雷达 Android 1.0.2 · A17 实机测试版','body':'修正音频分析失败后当天无法重试；音频通过统一 HTTPS/DNS 客户端获取并在本地解码，分析多个片段。新增音频分析结果与失败原因统计，以及网易云域名解析失败时的可关闭 HTTPS DNS 备用解析。保留原模型缓存、账号和音乐资料，使用原签名覆盖安装。真实 A17 音频与网络效果仍需实机确认。','draft':True,'prerelease':True,'make_latest':'false'})
+ release=api('repos/'+repo+'/releases','POST',{'tag_name':tag,'target_commitish':new['sha'],'name':'雷达 Android 1.0.3 · A17 实机测试版','body':'修正音频重采样整数溢出导致的负数下标与乐器分析失败。检查更新使用 GitHub 官方备用接口与 HTTP/1.1，连接失败显示明确说明。保留模型缓存、账号和音乐资料，使用原签名覆盖安装。已覆盖 44.1/48 kHz 的完整 30 秒音频回归；A17 实际识别与网络效果仍需实机确认。','draft':True,'prerelease':True,'make_latest':'false'})
 
-source=workspace/'outputs/Radar-Android-Source-1.0.2.zip'
+source=workspace/'outputs/Radar-Android-Source-1.0.3.zip'
 with zipfile.ZipFile(source,'w',zipfile.ZIP_DEFLATED) as z:
  for file in files:z.write(file,'android/'+file.relative_to(project).as_posix())
  z.writestr('.github/workflows/android.yml',workflow)
-for asset in [apk,source,workspace/'outputs/Radar-Android-1.0.2.sha256']:
+for asset in [apk,source,workspace/'outputs/Radar-Android-1.0.3.sha256']:
  digest=hashlib.sha256(asset.read_bytes()).hexdigest();existing=next((item for item in release.get('assets',[]) if item['name']==asset.name),None)
  if existing:
   if existing.get('digest')=='sha256:'+digest:continue

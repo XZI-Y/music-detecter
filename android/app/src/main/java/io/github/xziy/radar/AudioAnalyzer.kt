@@ -17,7 +17,7 @@ import java.security.MessageDigest
 import kotlin.math.*
 
 class AudioAnalyzer(private val context:Context,private val api:Netease,private val progress:(String)->Unit):AutoCloseable {
- companion object { const val VERSION="AST-AudioSet-q8-local-v2" }
+ companion object { const val VERSION="AST-AudioSet-q8-local-v3" }
  private var session:OrtSession?=null
  private val instrumentNames=mapOf("Piano" to "钢琴","Electric piano" to "电钢琴","Guitar" to "吉他","Acoustic guitar" to "原声吉他","Electric guitar" to "电吉他","Bass guitar" to "贝斯","Drum" to "鼓","Drum kit" to "架子鼓","Percussion" to "打击乐","Violin, fiddle" to "小提琴","Cello" to "大提琴","Flute" to "长笛","Saxophone" to "萨克斯","Trumpet" to "小号","Trombone" to "长号","Clarinet" to "单簧管","Harp" to "竖琴","Organ" to "管风琴","Accordion" to "手风琴","Synthesizer" to "合成器","Banjo" to "班卓琴","Ukulele" to "尤克里里","Gong" to "锣","Marimba, xylophone" to "木琴","Mandolin" to "曼陀铃")
  private val checksum="807d244b58a30eaa89f0a721fb841619c696857aabe4eac93769bd0b61497f61"
@@ -72,7 +72,7 @@ class AudioAnalyzer(private val context:Context,private val api:Netease,private 
     val out=c.dequeueOutputBuffer(info,10000);if(out==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED){val f=c.outputFormat;rate=f.getInteger(MediaFormat.KEY_SAMPLE_RATE);channels=f.getInteger(MediaFormat.KEY_CHANNEL_COUNT);floatPcm=f.containsKey(MediaFormat.KEY_PCM_ENCODING)&&f.getInteger(MediaFormat.KEY_PCM_ENCODING)==AudioFormat.ENCODING_PCM_FLOAT}
     if(out>=0){if(info.size>0){val b=c.getOutputBuffer(out)!!.duplicate().order(ByteOrder.LITTLE_ENDIAN);b.position(info.offset);b.limit(info.offset+info.size);while(b.remaining()>=(if(floatPcm)4 else 2)*channels){var sum=0f;repeat(channels){sum+=if(floatPcm)b.float else b.short/32768f};mono+=sum/channels}};ended=info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM!=0;c.releaseOutputBuffer(out,false)}
    }
-   val size=min(480000,(mono.size*16000.0/rate).toInt());return FloatArray(size){i->val at=i*rate/16000.0;val left=at.toInt().coerceAtMost(mono.size-1);val right=min(left+1,mono.size-1);(mono[left]+(mono[right]-mono[left])*(at-left)).toFloat()}
+   return AudioFeatures.resample(mono.toFloatArray(),rate)
   }finally{try{codec?.stop()}catch(_:Exception){};codec?.release();extractor.release()}
  }
  override fun close(){session?.close();session=null}
